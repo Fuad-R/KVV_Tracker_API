@@ -22,9 +22,10 @@ std::mutex cache_mutex;
 std::map<std::string, CacheEntry> stop_cache;
 const int CACHE_TTL_SECONDS = 30;
 
-// --- KVV Upstream Config ---
+// --- Configuration ---
 const std::string KVV_DM_URL = "https://projekte.kvv-efa.de/sl3-alone/XSLT_DM_REQUEST";
 const std::string KVV_SEARCH_URL = "https://projekte.kvv-efa.de/sl3-alone/XSLT_STOPFINDER_REQUEST";
+const std::string DEFAULT_PRIORITY_REGION = "karlsruhe"; // Fallback priority if no city is requested
 
 // --- Helper: String Utilities ---
 std::string toLower(const std::string& str) {
@@ -39,11 +40,14 @@ json searchStopsKVV(const std::string& query, const std::string& city = "") {
     std::string wildCardQuery = query;
     if (wildCardQuery.empty()) return json::array();
 
+    // Always append wildcard for partial matches
     if (wildCardQuery.back() != '*') {
         wildCardQuery += "*";
     }
 
-    // Server-side: fetch a large list (100) to ensure our target city is included
+    // Configure Parameters
+    // We request a large hit list (100) to ensure regional stops are included
+    // even if the API ranks other cities (like Stuttgart) higher initially.
     cpr::Parameters params{
         {"outputFormat", "JSON"},
         {"type_sf", "stop"},
@@ -87,32 +91,34 @@ json searchStopsKVV(const std::string& query, const std::string& city = "") {
             }
         }
 
-        // --- FIXED SORTING LOGIC ---
-        // We now check both the 'city' field AND the 'name' field.
-        // EFA 'name' is often "City, StopName", so checking 'name' ensures matches
-        // even if the API leaves the 'city' property empty.
-        if (!city.empty()) {
-            std::string targetCity = toLower(city);
-            std::stable_sort(result.begin(), result.end(),
-                [&](const json& a, const json& b) {
-                    std::string cityA = a.contains("city") ? toLower(a["city"]) : "";
-                    std::string nameA = a.contains("name") ? toLower(a["name"]) : "";
+        // --- SORTING LOGIC ---
+        // 1. Determine target city: Use user input OR default to Karlsruhe
+        std::string targetCity = city.empty() ? DEFAULT_PRIORITY_REGION : city;
+        targetCity = toLower(targetCity);
 
-                    std::string cityB = b.contains("city") ? toLower(b["city"]) : "";
-                    std::string nameB = b.contains("name") ? toLower(b["name"]) : "";
+        // 2. Sort results so matches appear at the top
+        // This runs ALWAYS, correcting the "Stuttgart first" issue for q=Europaplatz
+        std::stable_sort(result.begin(), result.end(),
+            [&](const json& a, const json& b) {
+                std::string cityA = a.contains("city") ? toLower(a["city"]) : "";
+                std::string nameA = a.contains("name") ? toLower(a["name"]) : "";
 
-                    // Match if target city appears in EITHER the structured city field OR the display name
-                    bool aMatches = (cityA.find(targetCity) != std::string::npos) ||
-                                    (nameA.find(targetCity) != std::string::npos);
-                    bool bMatches = (cityB.find(targetCity) != std::string::npos) ||
-                                    (nameB.find(targetCity) != std::string::npos);
+                std::string cityB = b.contains("city") ? toLower(b["city"]) : "";
+                std::string nameB = b.contains("name") ? toLower(b["name"]) : "";
 
-                    // Sort matches to the top
-                    if (aMatches && !bMatches) return true;
-                    if (!aMatches && bMatches) return false;
-                    return false;
-                });
-        }
+                // Check match in either 'city' field or 'name' string (e.g. "Karlsruhe, Europaplatz")
+                bool aMatches = (cityA.find(targetCity) != std::string::npos) ||
+                                (nameA.find(targetCity) != std::string::npos);
+                bool bMatches = (cityB.find(targetCity) != std::string::npos) ||
+                                (nameB.find(targetCity) != std::string::npos);
+
+                // If A matches and B doesn't, A comes first (return true)
+                if (aMatches && !bMatches) return true;
+                // If B matches and A doesn't, B comes first (return false)
+                if (!aMatches && bMatches) return false;
+
+                return false; // Keep original order if both match or both don't
+            });
 
         return result;
 
@@ -159,14 +165,12 @@ json normalizeResponse(const json& kvvData, bool detailed = false) {
             item["line"] = dep["servingLine"].value("number", "?");
             item["direction"] = dep["servingLine"].value("direction", "Unknown");
 
-            // Hints inside servingLine
             if (detailed && dep["servingLine"].contains("hints")) {
                 bool hasWheelchairAccess = false;
                 bool hasLowFloor = false;
 
                 for (const auto& hint : dep["servingLine"]["hints"]) {
                     std::string hintText = hint.value("hint", "");
-
                     if (hintText.find("Niederflur") != std::string::npos ||
                         hintText.find("low floor") != std::string::npos ||
                         hintText.find("lowFloor") != std::string::npos) {
@@ -183,7 +187,6 @@ json normalizeResponse(const json& kvvData, bool detailed = false) {
                 item["low_floor"] = hasLowFloor;
             }
 
-            // Train Details
             if (detailed) {
                 if (dep["servingLine"].contains("trainType")) {
                     item["train_type"] = dep["servingLine"].value("trainType", "");
@@ -219,7 +222,7 @@ json normalizeResponse(const json& kvvData, bool detailed = false) {
             item["is_realtime"] = false;
         }
 
-        // Top-level hints
+        // Hints
         if (detailed && dep.contains("hints")) {
             json hintsArray = json::array();
             for (const auto& hint : dep["hints"]) {
@@ -274,7 +277,6 @@ int main() {
             }
         }
 
-        // Fetch if not cached
         if (!cacheHit) {
             json rawData = fetchDeparturesKVV(stopId);
             if (rawData.contains("error")) return crow::response(502, rawData.dump());
@@ -285,7 +287,6 @@ int main() {
             stop_cache[cacheKey] = {allDepartures, std::chrono::steady_clock::now()};
         }
 
-        // Track Filter
         const char* requestedTrack = req.url_params.get("track");
         if (requestedTrack) {
             json filteredDepartures = json::array();
@@ -299,9 +300,7 @@ int main() {
                     match = true;
                 } else if (platform.size() > reqTrackStr.size() &&
                            platform.substr(0, reqTrackStr.size()) == reqTrackStr) {
-                    if (!isdigit(platform[reqTrackStr.size()])) {
-                        match = true;
-                    }
+                    if (!isdigit(platform[reqTrackStr.size()])) match = true;
                 } else if (platform.find(" " + reqTrackStr) != std::string::npos ||
                            platform.find("Gleis " + reqTrackStr) != std::string::npos) {
                     match = true;
