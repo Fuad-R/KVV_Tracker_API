@@ -103,8 +103,8 @@ json fetchDeparturesKVV(const std::string& stopId) {
     }
 }
 
-// --- Helper: Normalize Data ---
-json normalizeResponse(const json& kvvData) {
+// --- Helper: Normalize Data (Updated with Detailed Mode) ---
+json normalizeResponse(const json& kvvData, bool detailed = false) {
     json result = json::array();
     if (!kvvData.contains("departureList")) return result;
 
@@ -115,16 +115,56 @@ json normalizeResponse(const json& kvvData) {
         if (dep.contains("servingLine")) {
             item["line"] = dep["servingLine"].value("number", "?");
             item["direction"] = dep["servingLine"].value("direction", "Unknown");
+
+            // DETAILED MODE: Extract barrier-free/accessibility info from servingLine
+            if (detailed && dep["servingLine"].contains("hints")) {
+                bool hasWheelchairAccess = false;
+                bool hasLowFloor = false;
+
+                for (const auto& hint : dep["servingLine"]["hints"]) {
+                    std::string hintText = hint.value("hint", "");
+                    // Check for wheelchair/barrier-free indicators
+                    // Common hint texts: "Niederflur", "Rollstuhlgerecht", "wheelchairAccessible"
+                    if (hintText.find("Niederflur") != std::string::npos ||
+                        hintText.find("low floor") != std::string::npos ||
+                        hintText.find("lowFloor") != std::string::npos) {
+                        hasLowFloor = true;
+                    }
+                    if (hintText.find("Rollstuhl") != std::string::npos ||
+                        hintText.find("wheelchair") != std::string::npos ||
+                        hintText.find("barrierefrei") != std::string::npos ||
+                        hintText.find("barrier-free") != std::string::npos) {
+                        hasWheelchairAccess = true;
+                    }
+                }
+
+                item["wheelchair_accessible"] = hasWheelchairAccess || hasLowFloor;
+                item["low_floor"] = hasLowFloor;
+            }
+
+            // DETAILED MODE: Extract train composition/length if available
+            if (detailed) {
+                // Some EFA systems provide "trainType" or "motType" (means of transport type)
+                if (dep["servingLine"].contains("trainType")) {
+                    item["train_type"] = dep["servingLine"].value("trainType", "");
+                }
+
+                // Train length/composition might be in properties or servingLine
+                if (dep["servingLine"].contains("trainLength")) {
+                    item["train_length"] = dep["servingLine"].value("trainLength", "");
+                } else if (dep["servingLine"].contains("trainComposition")) {
+                    item["train_composition"] = dep["servingLine"].value("trainComposition", "");
+                }
+            }
         }
 
-        // Platform / Track Info (NEW)
-        // KVV often uses "platform" for the number (e.g. "1") or "platformName" (e.g. "Gleis 1")
+        // Platform / Track Info
         if (dep.contains("platform")) {
             item["platform"] = dep.value("platform", "");
         } else if (dep.contains("platformName")) {
-             item["platform"] = dep.value("platformName", "");
+            item["platform"] = dep.value("platformName", "");
         } else {
-             item["platform"] = "Unknown";
+            item["platform"] = "Unknown";
         }
 
         // Time / Countdown
@@ -139,6 +179,19 @@ json normalizeResponse(const json& kvvData) {
             item["is_realtime"] = true;
         } else {
             item["is_realtime"] = false;
+        }
+
+        // DETAILED MODE: Extract additional hints at the departure level
+        if (detailed && dep.contains("hints")) {
+            json hintsArray = json::array();
+            for (const auto& hint : dep["hints"]) {
+                if (hint.contains("hint")) {
+                    hintsArray.push_back(hint.value("hint", ""));
+                }
+            }
+            if (!hintsArray.empty()) {
+                item["hints"] = hintsArray;
+            }
         }
 
         result.push_back(item);
@@ -161,17 +214,24 @@ int main() {
         return crow::response(searchStopsKVV(std::string(query), city ? std::string(city) : "").dump());
     });
 
-    // Endpoint 2: Get Departures (Updated with Track Filter)
+    // Endpoint 2: Get Departures (Updated with Track Filter and Detailed Mode)
     CROW_ROUTE(app, "/api/stops/<string>")
     ([](const crow::request& req, const std::string& stopId){
+
+        // Check if detailed mode is requested
+        const char* detailedParam = req.url_params.get("detailed");
+        bool detailed = (detailedParam && (std::string(detailedParam) == "true" || std::string(detailedParam) == "1"));
 
         // 1. Get/Refresh Cache (Always fetch ALL tracks for the cache)
         json allDepartures;
         bool cacheHit = false;
 
+        // Create cache key that includes detailed flag
+        std::string cacheKey = stopId + (detailed ? "_detailed" : "");
+
         {
             std::lock_guard<std::mutex> lock(cache_mutex);
-            auto it = stop_cache.find(stopId);
+            auto it = stop_cache.find(cacheKey);
             if (it != stop_cache.end()) {
                 auto now = std::chrono::steady_clock::now();
                 if (std::chrono::duration_cast<std::chrono::seconds>(now - it->second.timestamp).count() < CACHE_TTL_SECONDS) {
@@ -185,17 +245,16 @@ int main() {
             json rawData = fetchDeparturesKVV(stopId);
             if (rawData.contains("error")) return crow::response(502, rawData.dump());
 
-            allDepartures = normalizeResponse(rawData);
+            allDepartures = normalizeResponse(rawData, detailed);
 
             // Update Cache
             {
                 std::lock_guard<std::mutex> lock(cache_mutex);
-                stop_cache[stopId] = {allDepartures, std::chrono::steady_clock::now()};
+                stop_cache[cacheKey] = {allDepartures, std::chrono::steady_clock::now()};
             }
         }
 
         // 2. Handle Track Filter
-        // Check if user requested specific track via ?track=...
         const char* requestedTrack = req.url_params.get("track");
 
         if (requestedTrack) {
@@ -203,7 +262,6 @@ int main() {
             std::string reqTrackStr = std::string(requestedTrack);
 
             for (const auto& dep : allDepartures) {
-                // Check if the platform matches the request
                 if (dep.value("platform", "") == reqTrackStr) {
                     filteredDepartures.push_back(dep);
                 }
