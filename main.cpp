@@ -261,8 +261,38 @@ int main() {
             json filteredDepartures = json::array();
             std::string reqTrackStr = std::string(requestedTrack);
 
+            // Normalize helper: basic trim (optional but good practice)
+            // For this logic, we assume reqTrackStr is "1", "2", etc.
+
             for (const auto& dep : allDepartures) {
-                if (dep.value("platform", "") == reqTrackStr) {
+                std::string platform = dep.value("platform", "");
+                bool match = false;
+
+                // 1. Exact Match (e.g. "1" == "1")
+                if (platform == reqTrackStr) {
+                    match = true;
+                }
+                // 2. Prefix Match with Boundary Check (e.g. "1 (U)" matches "1")
+                // Check if platform starts with request
+                else if (platform.size() > reqTrackStr.size() &&
+                         platform.substr(0, reqTrackStr.size()) == reqTrackStr) {
+
+                    // Boundary check: The next character must NOT be a digit.
+                    // This prevents "1" from matching "10", "11", "12"
+                    char nextChar = platform[reqTrackStr.size()];
+                    if (!isdigit(nextChar)) {
+                        match = true;
+                    }
+                }
+                // 3. Optional: Reverse check if data is "Gleis 1" and user asks "1"
+                // (This is common in German datasets, though KVV usually sends raw numbers in 'platform')
+                else if (platform.find(" " + reqTrackStr) != std::string::npos ||
+                         platform.find("Gleis " + reqTrackStr) != std::string::npos) {
+                    // This is a safety net for variations like "Gl. 1"
+                    match = true;
+                }
+
+                if (match) {
                     filteredDepartures.push_back(dep);
                 }
             }
