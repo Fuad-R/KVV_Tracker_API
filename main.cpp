@@ -22,16 +22,24 @@ const int CACHE_TTL_SECONDS = 30;
 const std::string KVV_DM_URL = "https://projekte.kvv-efa.de/sl3-alone/XSLT_DM_REQUEST";
 const std::string KVV_SEARCH_URL = "https://projekte.kvv-efa.de/sl3-alone/XSLT_STOPFINDER_REQUEST";
 
-// --- Helper: Search Stops ---
-json searchStopsKVV(const std::string& query) {
-    cpr::Response r = cpr::Get(
-        cpr::Url{KVV_SEARCH_URL},
-        cpr::Parameters{
+// --- Helper: Search Stops (Updated with City Filter) ---
+json searchStopsKVV(const std::string& query, const std::string& city = "") {
+    // Start with base parameters
+    cpr::Parameters params{
             {"outputFormat", "JSON"},
-            {"type_sf", "stop"}, // CHANGED: Restrict to stops only
+            {"type_sf", "stop"},      // Ensure we only search for stops (from previous fix)
             {"name_sf", query},
             {"anyObjFilter_sf", "2"}
-        }
+    };
+
+    // If a city is provided, add it to the request
+    if (!city.empty()) {
+        params.Add({"place_sf", city});
+    }
+
+    cpr::Response r = cpr::Get(
+        cpr::Url{KVV_SEARCH_URL},
+        params
     );
 
     if (r.status_code != 200) return {{"error", "Upstream Error"}};
@@ -42,23 +50,26 @@ json searchStopsKVV(const std::string& query) {
 
         if (raw.contains("stopFinder") && raw["stopFinder"].contains("points")) {
             auto& points = raw["stopFinder"]["points"];
-            if (points.is_array()) {
-                for (const auto& p : points) {
-                    if (p.contains("stateless")) {
-                        result.push_back({
-                            {"id", p.value("stateless", "")},
-                            {"name", p.value("name", "Unknown")}
-                        });
+
+            // Helper lambda to process a single point
+            auto processPoint = [&](const json& p) {
+                if (p.contains("stateless")) {
+                    json item = {
+                        {"id", p.value("stateless", "")},
+                        {"name", p.value("name", "Unknown")}
+                    };
+                    // Optional: Include city/place name in response if available
+                    if (p.contains("place")) {
+                        item["city"] = p.value("place", "");
                     }
+                    result.push_back(item);
                 }
+            };
+
+            if (points.is_array()) {
+                for (const auto& p : points) processPoint(p);
             } else if (points.is_object()) {
-                // ADDED: Safety check to ensure the object is actually a stop
-                if (points.contains("stateless")) {
-                    result.push_back({
-                        {"id", points.value("stateless", "")},
-                        {"name", points.value("name", "Unknown")}
-                    });
-                }
+                processPoint(points);
             }
         }
         return result;
@@ -138,12 +149,16 @@ json normalizeResponse(const json& kvvData) {
 int main() {
     crow::SimpleApp app;
 
-    // Endpoint 1: Search
+    // Endpoint 1: Search (Updated to accept 'city' param)
     CROW_ROUTE(app, "/api/stops/search")
     ([](const crow::request& req){
         auto query = req.url_params.get("q");
+        auto city = req.url_params.get("city"); // Get optional city parameter
+
         if (!query) return crow::response(400, "Missing 'q' parameter");
-        return crow::response(searchStopsKVV(std::string(query)).dump());
+
+        // Pass the city (or empty string if null) to the helper
+        return crow::response(searchStopsKVV(std::string(query), city ? std::string(city) : "").dump());
     });
 
     // Endpoint 2: Get Departures (Updated with Track Filter)
