@@ -28,7 +28,7 @@ json searchStopsKVV(const std::string& query) {
         cpr::Url{KVV_SEARCH_URL},
         cpr::Parameters{
             {"outputFormat", "JSON"},
-            {"type_sf", "any"},
+            {"type_sf", "stop"}, // CHANGED: Restrict to stops only
             {"name_sf", query},
             {"anyObjFilter_sf", "2"}
         }
@@ -52,10 +52,13 @@ json searchStopsKVV(const std::string& query) {
                     }
                 }
             } else if (points.is_object()) {
-                 result.push_back({
-                    {"id", points.value("stateless", "")},
-                    {"name", points.value("name", "Unknown")}
-                });
+                // ADDED: Safety check to ensure the object is actually a stop
+                if (points.contains("stateless")) {
+                    result.push_back({
+                        {"id", points.value("stateless", "")},
+                        {"name", points.value("name", "Unknown")}
+                    });
+                }
             }
         }
         return result;
@@ -63,6 +66,7 @@ json searchStopsKVV(const std::string& query) {
         return {{"error", "Invalid JSON from KVV Search"}};
     }
 }
+
 
 // --- Helper: Fetch Departures ---
 json fetchDeparturesKVV(const std::string& stopId) {
