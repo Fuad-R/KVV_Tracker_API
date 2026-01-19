@@ -22,17 +22,22 @@ const int CACHE_TTL_SECONDS = 30;
 const std::string KVV_DM_URL = "https://projekte.kvv-efa.de/sl3-alone/XSLT_DM_REQUEST";
 const std::string KVV_SEARCH_URL = "https://projekte.kvv-efa.de/sl3-alone/XSLT_STOPFINDER_REQUEST";
 
-// --- Helper: Search Stops (Updated with City Filter) ---
+// --- Helper: Search Stops (Fixed for Exact Matches) ---
 json searchStopsKVV(const std::string& query, const std::string& city = "") {
-    // Start with base parameters
+
+    // FIX: Append '*' to the query to force prefix/list search mode
+    std::string wildCardQuery = query;
+    if (wildCardQuery.back() != '*') {
+        wildCardQuery += "*";
+    }
+
     cpr::Parameters params{
             {"outputFormat", "JSON"},
-            {"type_sf", "stop"},      // Ensure we only search for stops (from previous fix)
-            {"name_sf", query},
+            {"type_sf", "stop"},
+            {"name_sf", wildCardQuery}, // Use the wildcard query
             {"anyObjFilter_sf", "2"}
     };
 
-    // If a city is provided, add it to the request
     if (!city.empty()) {
         params.Add({"place_sf", city});
     }
@@ -51,14 +56,12 @@ json searchStopsKVV(const std::string& query, const std::string& city = "") {
         if (raw.contains("stopFinder") && raw["stopFinder"].contains("points")) {
             auto& points = raw["stopFinder"]["points"];
 
-            // Helper lambda to process a single point
             auto processPoint = [&](const json& p) {
                 if (p.contains("stateless")) {
                     json item = {
                         {"id", p.value("stateless", "")},
                         {"name", p.value("name", "Unknown")}
                     };
-                    // Optional: Include city/place name in response if available
                     if (p.contains("place")) {
                         item["city"] = p.value("place", "");
                     }
@@ -77,6 +80,7 @@ json searchStopsKVV(const std::string& query, const std::string& city = "") {
         return {{"error", "Invalid JSON from KVV Search"}};
     }
 }
+
 
 
 // --- Helper: Fetch Departures ---
