@@ -39,18 +39,17 @@ json searchStopsKVV(const std::string& query, const std::string& city = "") {
     std::string wildCardQuery = query;
     if (wildCardQuery.empty()) return json::array();
 
-    // Append wildcard for partial matching if not present
     if (wildCardQuery.back() != '*') {
         wildCardQuery += "*";
     }
 
-    // Configure params (Server-side city filter removed to prevent empty results)
+    // Server-side: fetch a large list (100) to ensure our target city is included
     cpr::Parameters params{
         {"outputFormat", "JSON"},
         {"type_sf", "stop"},
         {"name_sf", wildCardQuery},
-        {"anyObjFilter_sf", "2"},      // Stop filter
-        {"anyMaxSizeHitList", "100"}   // High limit to catch regional results
+        {"anyObjFilter_sf", "2"},
+        {"anyMaxSizeHitList", "100"}
     };
 
     cpr::Response r = cpr::Get(
@@ -74,10 +73,8 @@ json searchStopsKVV(const std::string& query, const std::string& city = "") {
                         {"name", p.value("name", "Unknown")}
                     };
 
-                    std::string itemCity = "";
                     if (p.contains("place")) {
-                        itemCity = p.value("place", "");
-                        item["city"] = itemCity;
+                        item["city"] = p.value("place", "");
                     }
                     result.push_back(item);
                 }
@@ -90,17 +87,27 @@ json searchStopsKVV(const std::string& query, const std::string& city = "") {
             }
         }
 
-        // Client-Side Sorting: Prioritize requested city
+        // --- FIXED SORTING LOGIC ---
+        // We now check both the 'city' field AND the 'name' field.
+        // EFA 'name' is often "City, StopName", so checking 'name' ensures matches
+        // even if the API leaves the 'city' property empty.
         if (!city.empty()) {
             std::string targetCity = toLower(city);
             std::stable_sort(result.begin(), result.end(),
                 [&](const json& a, const json& b) {
                     std::string cityA = a.contains("city") ? toLower(a["city"]) : "";
+                    std::string nameA = a.contains("name") ? toLower(a["name"]) : "";
+
                     std::string cityB = b.contains("city") ? toLower(b["city"]) : "";
+                    std::string nameB = b.contains("name") ? toLower(b["name"]) : "";
 
-                    bool aMatches = (cityA.find(targetCity) != std::string::npos);
-                    bool bMatches = (cityB.find(targetCity) != std::string::npos);
+                    // Match if target city appears in EITHER the structured city field OR the display name
+                    bool aMatches = (cityA.find(targetCity) != std::string::npos) ||
+                                    (nameA.find(targetCity) != std::string::npos);
+                    bool bMatches = (cityB.find(targetCity) != std::string::npos) ||
+                                    (nameB.find(targetCity) != std::string::npos);
 
+                    // Sort matches to the top
                     if (aMatches && !bMatches) return true;
                     if (!aMatches && bMatches) return false;
                     return false;
@@ -152,7 +159,7 @@ json normalizeResponse(const json& kvvData, bool detailed = false) {
             item["line"] = dep["servingLine"].value("number", "?");
             item["direction"] = dep["servingLine"].value("direction", "Unknown");
 
-            // Hints inside servingLine (Accessibility)
+            // Hints inside servingLine
             if (detailed && dep["servingLine"].contains("hints")) {
                 bool hasWheelchairAccess = false;
                 bool hasLowFloor = false;
