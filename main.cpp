@@ -24,28 +24,28 @@ const std::string KVV_SEARCH_URL = "https://projekte.kvv-efa.de/sl3-alone/XSLT_S
 
 // --- Helper: Search Stops (Fixed for Exact Matches) ---
 json searchStopsKVV(const std::string& query, const std::string& city = "") {
+    std::string searchQuery = query;
 
-    // FIX: Append '*' to the query to force prefix/list search mode
-    std::string wildCardQuery = query;
-    if (wildCardQuery.back() != '*') {
-        wildCardQuery += "*";
+    // Only append wildcard if no city filter is specified
+    if (city.empty() && searchQuery.back() != '*') {
+        searchQuery += "*";
     }
 
     cpr::Parameters params{
-            {"outputFormat", "JSON"},
-            {"type_sf", "stop"},
-            {"name_sf", wildCardQuery}, // Use the wildcard query
-            {"anyObjFilter_sf", "2"}
+        {"outputFormat", "JSON"},
+        {"type_sf", "stop"},
+        {"name_sf", searchQuery},
+        {"anyObjFilter_sf", "2"},
+        {"anyMaxSizeHitList", "50"}
     };
 
     if (!city.empty()) {
         params.Add({"place_sf", city});
+        // Try adding regional sorter for KVV
+        params.Add({"anyResSort_sf", "kvv"});
     }
 
-    cpr::Response r = cpr::Get(
-        cpr::Url{KVV_SEARCH_URL},
-        params
-    );
+    cpr::Response r = cpr::Get(cpr::Url{KVV_SEARCH_URL}, params);
 
     if (r.status_code != 200) return {{"error", "Upstream Error"}};
 
@@ -55,7 +55,6 @@ json searchStopsKVV(const std::string& query, const std::string& city = "") {
 
         if (raw.contains("stopFinder") && raw["stopFinder"].contains("points")) {
             auto& points = raw["stopFinder"]["points"];
-
             auto processPoint = [&](const json& p) {
                 if (p.contains("stateless")) {
                     json item = {
@@ -65,6 +64,12 @@ json searchStopsKVV(const std::string& query, const std::string& city = "") {
                     if (p.contains("place")) {
                         item["city"] = p.value("place", "");
                     }
+
+                    // Add match quality for sorting
+                    if (p.contains("matchQuality")) {
+                        item["matchQuality"] = p["matchQuality"];
+                    }
+
                     result.push_back(item);
                 }
             };
@@ -75,7 +80,31 @@ json searchStopsKVV(const std::string& query, const std::string& city = "") {
                 processPoint(points);
             }
         }
+
+        // Post-process: Filter by city if specified and no results
+        if (!city.empty() && !result.empty()) {
+            json filtered = json::array();
+            std::string cityLower = city;
+            std::transform(cityLower.begin(), cityLower.end(), cityLower.begin(), ::tolower);
+
+            for (const auto& item : result) {
+                if (item.contains("city")) {
+                    std::string itemCity = item["city"].get<std::string>();
+                    std::transform(itemCity.begin(), itemCity.end(), itemCity.begin(), ::tolower);
+
+                    if (itemCity.find(cityLower) != std::string::npos) {
+                        filtered.push_back(item);
+                    }
+                }
+            }
+
+            if (!filtered.empty()) {
+                result = filtered;
+            }
+        }
+
         return result;
+
     } catch (...) {
         return {{"error", "Invalid JSON from KVV Search"}};
     }
