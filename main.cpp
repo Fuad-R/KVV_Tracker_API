@@ -152,7 +152,7 @@ json fetchDeparturesKVV(const std::string& stopId) {
 }
 
 // --- Helper: Normalize Data ---
-json normalizeResponse(const json& kvvData, bool detailed = false) {
+json normalizeResponse(const json& kvvData, bool detailed = false, bool includeDelay = false) {
     json result = json::array();
     if (!kvvData.contains("departureList")) return result;
 
@@ -171,8 +171,18 @@ json normalizeResponse(const json& kvvData, bool detailed = false) {
             item["line"] = dep["servingLine"].value("number", "?");
             item["direction"] = dep["servingLine"].value("direction", "Unknown");
 
+            // Delay field (from servingLine.delay)
+            if (includeDelay && dep["servingLine"].contains("delay")) {
+                try {
+                    int delayMinutes = std::stoi(dep["servingLine"].value("delay", "0"));
+                    item["delay_minutes"] = delayMinutes;
+                } catch (...) {
+                    item["delay_minutes"] = 0;
+                }
+            }
+
             if (detailed) {
-                // 1) Prefer "attrs" flags (planned vehicle properties)
+                // ... (rest of your detailed code stays the same)
                 bool hasPlanLowFloor = false;
                 bool hasPlanWheelchair = false;
                 bool planLowFloor = false;
@@ -187,15 +197,13 @@ json normalizeResponse(const json& kvvData, bool detailed = false) {
                         if (lname == "planlowfloorvehicle") {
                             hasPlanLowFloor = true;
                             planLowFloor = strToBool(value);
-                        } else if (lname == "planwheelchairaccess" || lname == "planwheelchairaccess") {
-                            // (second condition looks redundant but keeps intent obvious)
+                        } else if (lname == "planwheelchairaccess") {
                             hasPlanWheelchair = true;
                             planWheelchair = strToBool(value);
                         }
                     }
                 }
 
-                // 2) Fallback: infer from servingLine.hints (KVV sometimes uses "content", not "hint")
                 bool hintLowFloor = false;
                 bool hintWheelchair = false;
 
@@ -216,15 +224,12 @@ json normalizeResponse(const json& kvvData, bool detailed = false) {
                     }
                 }
 
-                // 3) Final values: attrs override hints when present
                 bool lowFloor = hasPlanLowFloor ? planLowFloor : hintLowFloor;
                 bool wheelchair = hasPlanWheelchair ? planWheelchair : hintWheelchair;
 
-                // Keep your original behavior: low-floor implies wheelchair_accessible
                 item["low_floor"] = lowFloor;
                 item["wheelchair_accessible"] = wheelchair || lowFloor;
 
-                // Keep your existing extra detailed servingLine fields
                 if (dep["servingLine"].contains("trainType"))
                     item["train_type"] = dep["servingLine"].value("trainType", "");
                 if (dep["servingLine"].contains("trainLength"))
@@ -246,7 +251,7 @@ json normalizeResponse(const json& kvvData, bool detailed = false) {
         // Realtime
         item["is_realtime"] = dep.contains("realDateTime");
 
-        // Hints (top-level dep.hints) - also fix "content" vs "hint"
+        // Hints
         if (detailed && dep.contains("hints") && dep["hints"].is_array()) {
             json hintsArray = json::array();
             for (const auto& h : dep["hints"]) {
@@ -280,12 +285,15 @@ int main() {
     CROW_ROUTE(app, "/api/stops/<string>")
     ([](const crow::request& req, std::string stopId){
         const char* detailedParam = req.url_params.get("detailed");
-        bool detailed = (detailedParam && (std::string(detailedParam) == "true" || std::string(detailedParam) == "1"));
+        const char* delayParam = req.url_params.get("delay");
 
-        // Cache Check
+        bool detailed = (detailedParam && (std::string(detailedParam) == "true" || std::string(detailedParam) == "1"));
+        bool includeDelay = (delayParam && (std::string(delayParam) == "true" || std::string(delayParam) == "1"));
+
+        // Cache Check - include delay in cache key
         json allDepartures;
         bool cacheHit = false;
-        std::string cacheKey = stopId + (detailed ? "_detailed" : "");
+        std::string cacheKey = stopId + (detailed ? "_detailed" : "") + (includeDelay ? "_delay" : "");
 
         {
             std::lock_guard<std::mutex> lock(cache_mutex);
@@ -303,7 +311,7 @@ int main() {
             json rawData = fetchDeparturesKVV(stopId);
             if (rawData.contains("error")) return crow::response(502, rawData.dump());
 
-            allDepartures = normalizeResponse(rawData, detailed);
+            allDepartures = normalizeResponse(rawData, detailed, includeDelay);
 
             std::lock_guard<std::mutex> lock(cache_mutex);
             stop_cache[cacheKey] = {allDepartures, std::chrono::steady_clock::now()};
@@ -334,7 +342,8 @@ int main() {
         }
 
         return crow::response(allDepartures.dump());
-    });
+});
+
 
     app.port(8080).multithreaded().run();
 }
