@@ -154,8 +154,14 @@ json fetchDeparturesKVV(const std::string& stopId) {
 // --- Helper: Normalize Data ---
 json normalizeResponse(const json& kvvData, bool detailed = false) {
     json result = json::array();
-
     if (!kvvData.contains("departureList")) return result;
+
+    auto strToBool = [](const std::string& v) {
+        std::string s = v;
+        std::transform(s.begin(), s.end(), s.begin(),
+                       [](unsigned char c){ return std::tolower(c); });
+        return (s == "1" || s == "true" || s == "yes");
+    };
 
     for (const auto& dep : kvvData["departureList"]) {
         json item;
@@ -165,78 +171,94 @@ json normalizeResponse(const json& kvvData, bool detailed = false) {
             item["line"] = dep["servingLine"].value("number", "?");
             item["direction"] = dep["servingLine"].value("direction", "Unknown");
 
-            if (detailed && dep["servingLine"].contains("hints")) {
-                bool hasWheelchairAccess = false;
-                bool hasLowFloor = false;
-
-                for (const auto& hint : dep["servingLine"]["hints"]) {
-                    std::string hintText = hint.value("hint", "");
-                    if (hintText.find("Niederflur") != std::string::npos ||
-                        hintText.find("low floor") != std::string::npos ||
-                        hintText.find("lowFloor") != std::string::npos) {
-                        hasLowFloor = true;
-                    }
-                    if (hintText.find("Rollstuhl") != std::string::npos ||
-                        hintText.find("wheelchair") != std::string::npos ||
-                        hintText.find("barrierefrei") != std::string::npos ||
-                        hintText.find("barrier-free") != std::string::npos) {
-                        hasWheelchairAccess = true;
-                    }
-                }
-                item["wheelchair_accessible"] = hasWheelchairAccess || hasLowFloor;
-                item["low_floor"] = hasLowFloor;
-            }
-
             if (detailed) {
-                if (dep["servingLine"].contains("trainType")) {
+                // 1) Prefer "attrs" flags (planned vehicle properties)
+                bool hasPlanLowFloor = false;
+                bool hasPlanWheelchair = false;
+                bool planLowFloor = false;
+                bool planWheelchair = false;
+
+                if (dep.contains("attrs") && dep["attrs"].is_array()) {
+                    for (const auto& a : dep["attrs"]) {
+                        std::string name = a.value("name", "");
+                        std::string value = a.value("value", "");
+
+                        std::string lname = toLower(name);
+                        if (lname == "planlowfloorvehicle") {
+                            hasPlanLowFloor = true;
+                            planLowFloor = strToBool(value);
+                        } else if (lname == "planwheelchairaccess" || lname == "planwheelchairaccess") {
+                            // (second condition looks redundant but keeps intent obvious)
+                            hasPlanWheelchair = true;
+                            planWheelchair = strToBool(value);
+                        }
+                    }
+                }
+
+                // 2) Fallback: infer from servingLine.hints (KVV sometimes uses "content", not "hint")
+                bool hintLowFloor = false;
+                bool hintWheelchair = false;
+
+                if (dep["servingLine"].contains("hints") && dep["servingLine"]["hints"].is_array()) {
+                    for (const auto& h : dep["servingLine"]["hints"]) {
+                        std::string txt = h.value("hint", h.value("content", ""));
+                        if (txt.find("Niederflur") != std::string::npos ||
+                            txt.find("low floor") != std::string::npos ||
+                            txt.find("lowFloor") != std::string::npos) {
+                            hintLowFloor = true;
+                        }
+                        if (txt.find("Rollstuhl") != std::string::npos ||
+                            txt.find("wheelchair") != std::string::npos ||
+                            txt.find("barrierefrei") != std::string::npos ||
+                            txt.find("barrier-free") != std::string::npos) {
+                            hintWheelchair = true;
+                        }
+                    }
+                }
+
+                // 3) Final values: attrs override hints when present
+                bool lowFloor = hasPlanLowFloor ? planLowFloor : hintLowFloor;
+                bool wheelchair = hasPlanWheelchair ? planWheelchair : hintWheelchair;
+
+                // Keep your original behavior: low-floor implies wheelchair_accessible
+                item["low_floor"] = lowFloor;
+                item["wheelchair_accessible"] = wheelchair || lowFloor;
+
+                // Keep your existing extra detailed servingLine fields
+                if (dep["servingLine"].contains("trainType"))
                     item["train_type"] = dep["servingLine"].value("trainType", "");
-                }
-                if (dep["servingLine"].contains("trainLength")) {
+                if (dep["servingLine"].contains("trainLength"))
                     item["train_length"] = dep["servingLine"].value("trainLength", "");
-                } else if (dep["servingLine"].contains("trainComposition")) {
+                else if (dep["servingLine"].contains("trainComposition"))
                     item["train_composition"] = dep["servingLine"].value("trainComposition", "");
-                }
             }
         }
 
         // Platform
-        if (dep.contains("platform")) {
-            item["platform"] = dep.value("platform", "");
-        } else if (dep.contains("platformName")) {
-            item["platform"] = dep.value("platformName", "");
-        } else {
-            item["platform"] = "Unknown";
-        }
+        if (dep.contains("platform")) item["platform"] = dep.value("platform", "");
+        else if (dep.contains("platformName")) item["platform"] = dep.value("platformName", "");
+        else item["platform"] = "Unknown";
 
         // Countdown
-        if (dep.contains("countdown")) {
-            item["minutes_remaining"] = std::stoi(dep.value("countdown", "0"));
-        } else {
-            item["minutes_remaining"] = 0;
-        }
+        if (dep.contains("countdown")) item["minutes_remaining"] = std::stoi(dep.value("countdown", "0"));
+        else item["minutes_remaining"] = 0;
 
         // Realtime
-        if (dep.contains("realDateTime")) {
-            item["is_realtime"] = true;
-        } else {
-            item["is_realtime"] = false;
-        }
+        item["is_realtime"] = dep.contains("realDateTime");
 
-        // Hints
-        if (detailed && dep.contains("hints")) {
+        // Hints (top-level dep.hints) - also fix "content" vs "hint"
+        if (detailed && dep.contains("hints") && dep["hints"].is_array()) {
             json hintsArray = json::array();
-            for (const auto& hint : dep["hints"]) {
-                if (hint.contains("hint")) {
-                    hintsArray.push_back(hint.value("hint", ""));
-                }
+            for (const auto& h : dep["hints"]) {
+                std::string txt = h.value("hint", h.value("content", ""));
+                if (!txt.empty()) hintsArray.push_back(txt);
             }
-            if (!hintsArray.empty()) {
-                item["hints"] = hintsArray;
-            }
+            if (!hintsArray.empty()) item["hints"] = hintsArray;
         }
 
         result.push_back(item);
     }
+
     return result;
 }
 
