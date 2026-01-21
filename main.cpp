@@ -36,11 +36,11 @@ std::string toLower(const std::string& str) {
 }
 
 // --- Helper: Search Stops ---
-// Updated signature to accept includeLocation
-json searchStopsKVV(const std::string& query, const std::string& city = "", bool includeLocation = false) {
+json searchStopsKVV(const std::string& query, const std::string& city = "", bool includeLocation = false, bool detailed = false) {
     std::string wildCardQuery = query;
     if (wildCardQuery.empty()) return json::array();
 
+    // Ensure wildcard for partial matches
     if (wildCardQuery.back() != '*') {
         wildCardQuery += "*";
     }
@@ -49,10 +49,13 @@ json searchStopsKVV(const std::string& query, const std::string& city = "", bool
         {"outputFormat", "JSON"},
         {"type_sf", "stop"},
         {"name_sf", wildCardQuery},
-        {"anyObjFilter_sf", "2"},
+        {"anyObjFilter_sf", "2"},      // 2 = stop IDs and alias names
         {"anyMaxSizeHitList", "100"},
-        // Request standard GPS coordinates (Lon/Lat) instead of raw projection
-        {"coordOutputFormat", "WGS84[dd.ddddd]"}
+        {"coordOutputFormat", "WGS84[dd.ddddd]"},
+
+        // NEW: EFA Specific Control Parameters
+        // prevent single result on perfect match
+        {"anySigWhenPerfectNoOtherMatches", "0"}
     };
 
     cpr::Response r = cpr::Get(
@@ -76,15 +79,42 @@ json searchStopsKVV(const std::string& query, const std::string& city = "", bool
                         {"name", p.value("name", "Unknown")}
                     };
 
+                    // Extract EFA Quality Metrics
+                    // matchQuality is usually an int (lower is better)
+                    int matchQuality = 999999;
+                    if(p.contains("matchQuality")) {
+                        matchQuality = p.value("matchQuality", 999999);
+                    }
+
+                    // isBest is a boolean
+                    bool isBest = false;
+                    if(p.contains("isBest")) {
+                        // isBest can sometimes be string "true"/"false" or boolean in JSON
+                        if (p["isBest"].is_boolean()) {
+                            isBest = p["isBest"].get<bool>();
+                        } else if (p["isBest"].is_string()) {
+                            std::string val = p.value("isBest", "false");
+                            isBest = (val == "true" || val == "1");
+                        }
+                    }
+
                     if (p.contains("place")) {
                         item["city"] = p.value("place", "");
                     }
 
-                    // --- NEW: Location Parsing ---
                     if (includeLocation && p.contains("ref") && p["ref"].contains("coords")) {
-                        // Returns string "8.401...,49.005..." (Lon,Lat)
                         item["coordinates"] = p["ref"].value("coords", "");
                     }
+
+                    // Add extended metadata if requested
+                    if (detailed) {
+                        item["is_best"] = isBest;
+                        item["match_quality"] = matchQuality;
+                    }
+
+                    // Store metrics internally for sorting even if not returned
+                    item["_internal_score"] = matchQuality;
+                    item["_internal_is_best"] = isBest;
 
                     result.push_back(item);
                 }
@@ -98,26 +128,40 @@ json searchStopsKVV(const std::string& query, const std::string& city = "", bool
         }
 
         // --- SORTING LOGIC ---
-        // (Keep your existing sorting logic exactly as is)
+        // 1. Target City: Default to Karlsruhe if empty
         std::string targetCity = city.empty() ? DEFAULT_PRIORITY_REGION : city;
         targetCity = toLower(targetCity);
 
+        // 2. Sort results
         std::stable_sort(result.begin(), result.end(),
             [&](const json& a, const json& b) {
+                // Priority 1: "isBest" flag from EFA
+                bool bestA = a.value("_internal_is_best", false);
+                bool bestB = b.value("_internal_is_best", false);
+                if (bestA != bestB) return bestA; // True comes first
+
+                // Priority 2: City Match
                 std::string cityA = a.contains("city") ? toLower(a["city"]) : "";
-                std::string nameA = a.contains("name") ? toLower(a["name"]) : "";
                 std::string cityB = b.contains("city") ? toLower(b["city"]) : "";
-                std::string nameB = b.contains("name") ? toLower(b["name"]) : "";
 
-                bool aMatches = (cityA.find(targetCity) != std::string::npos) ||
-                                (nameA.find(targetCity) != std::string::npos);
-                bool bMatches = (cityB.find(targetCity) != std::string::npos) ||
-                                (nameB.find(targetCity) != std::string::npos);
+                bool cityMatchA = (cityA.find(targetCity) != std::string::npos);
+                bool cityMatchB = (cityB.find(targetCity) != std::string::npos);
 
-                if (aMatches && !bMatches) return true;
-                if (!aMatches && bMatches) return false;
+                if (cityMatchA != cityMatchB) return cityMatchA; // Match comes first
+
+                // Priority 3: Match Quality Score (Lower is better)
+                int scoreA = a.value("_internal_score", 999999);
+                int scoreB = b.value("_internal_score", 999999);
+                if (scoreA != scoreB) return scoreA < scoreB;
+
                 return false;
             });
+
+        // Cleanup internal keys before returning
+        for (auto& item : result) {
+            item.erase("_internal_score");
+            item.erase("_internal_is_best");
+        }
 
         return result;
 
@@ -275,12 +319,14 @@ int main() {
         auto query = req.url_params.get("q");
         auto city = req.url_params.get("city");
         auto locationParam = req.url_params.get("location");
+        auto detailedParam = req.url_params.get("detailed");
 
         bool includeLocation = (locationParam && (std::string(locationParam) == "true" || std::string(locationParam) == "1"));
+        bool detailed = (detailedParam && (std::string(detailedParam) == "true" || std::string(detailedParam) == "1"));
 
         if (!query) return crow::response(400, "Missing 'q' parameter");
 
-        return crow::response(searchStopsKVV(std::string(query), city ? std::string(city) : "", includeLocation).dump());
+        return crow::response(searchStopsKVV(std::string(query), city ? std::string(city) : "", includeLocation, detailed).dump());
     });
 
     // Departures Endpoint
