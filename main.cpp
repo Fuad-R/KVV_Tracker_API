@@ -36,24 +36,23 @@ std::string toLower(const std::string& str) {
 }
 
 // --- Helper: Search Stops ---
-json searchStopsKVV(const std::string& query, const std::string& city = "") {
+// Updated signature to accept includeLocation
+json searchStopsKVV(const std::string& query, const std::string& city = "", bool includeLocation = false) {
     std::string wildCardQuery = query;
     if (wildCardQuery.empty()) return json::array();
 
-    // Always append wildcard for partial matches
     if (wildCardQuery.back() != '*') {
         wildCardQuery += "*";
     }
 
-    // Configure Parameters
-    // We request a large hit list (100) to ensure regional stops are included
-    // even if the API ranks other cities (like Stuttgart) higher initially.
     cpr::Parameters params{
         {"outputFormat", "JSON"},
         {"type_sf", "stop"},
         {"name_sf", wildCardQuery},
         {"anyObjFilter_sf", "2"},
-        {"anyMaxSizeHitList", "100"}
+        {"anyMaxSizeHitList", "100"},
+        // Request standard GPS coordinates (Lon/Lat) instead of raw projection
+        {"coordOutputFormat", "WGS84[dd.ddddd]"}
     };
 
     cpr::Response r = cpr::Get(
@@ -80,6 +79,13 @@ json searchStopsKVV(const std::string& query, const std::string& city = "") {
                     if (p.contains("place")) {
                         item["city"] = p.value("place", "");
                     }
+
+                    // --- NEW: Location Parsing ---
+                    if (includeLocation && p.contains("ref") && p["ref"].contains("coords")) {
+                        // Returns string "8.401...,49.005..." (Lon,Lat)
+                        item["coordinates"] = p["ref"].value("coords", "");
+                    }
+
                     result.push_back(item);
                 }
             };
@@ -92,32 +98,25 @@ json searchStopsKVV(const std::string& query, const std::string& city = "") {
         }
 
         // --- SORTING LOGIC ---
-        // 1. Determine target city: Use user input OR default to Karlsruhe
+        // (Keep your existing sorting logic exactly as is)
         std::string targetCity = city.empty() ? DEFAULT_PRIORITY_REGION : city;
         targetCity = toLower(targetCity);
 
-        // 2. Sort results so matches appear at the top
-        // This runs ALWAYS, correcting the "Stuttgart first" issue for q=Europaplatz
         std::stable_sort(result.begin(), result.end(),
             [&](const json& a, const json& b) {
                 std::string cityA = a.contains("city") ? toLower(a["city"]) : "";
                 std::string nameA = a.contains("name") ? toLower(a["name"]) : "";
-
                 std::string cityB = b.contains("city") ? toLower(b["city"]) : "";
                 std::string nameB = b.contains("name") ? toLower(b["name"]) : "";
 
-                // Check match in either 'city' field or 'name' string (e.g. "Karlsruhe, Europaplatz")
                 bool aMatches = (cityA.find(targetCity) != std::string::npos) ||
                                 (nameA.find(targetCity) != std::string::npos);
                 bool bMatches = (cityB.find(targetCity) != std::string::npos) ||
                                 (nameB.find(targetCity) != std::string::npos);
 
-                // If A matches and B doesn't, A comes first (return true)
                 if (aMatches && !bMatches) return true;
-                // If B matches and A doesn't, B comes first (return false)
                 if (!aMatches && bMatches) return false;
-
-                return false; // Keep original order if both match or both don't
+                return false;
             });
 
         return result;
@@ -275,10 +274,13 @@ int main() {
     ([](const crow::request& req){
         auto query = req.url_params.get("q");
         auto city = req.url_params.get("city");
+        auto locationParam = req.url_params.get("location");
+
+        bool includeLocation = (locationParam && (std::string(locationParam) == "true" || std::string(locationParam) == "1"));
 
         if (!query) return crow::response(400, "Missing 'q' parameter");
 
-        return crow::response(searchStopsKVV(std::string(query), city ? std::string(city) : "").dump());
+        return crow::response(searchStopsKVV(std::string(query), city ? std::string(city) : "", includeLocation).dump());
     });
 
     // Departures Endpoint
