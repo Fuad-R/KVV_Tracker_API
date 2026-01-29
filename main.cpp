@@ -170,6 +170,13 @@ json normalizeResponse(const json& kvvData, bool detailed = false, bool includeD
             item["line"] = dep["servingLine"].value("number", "?");
             item["direction"] = dep["servingLine"].value("direction", "Unknown");
 
+            // ADD THIS: Extract MOT (Mode of Transport)
+            if (dep["servingLine"].contains("motType")) {
+                item["mot"] = std::stoi(dep["servingLine"].value("motType", "-1"));
+            } else {
+                item["mot"] = -1; // Unknown/not provided
+            }
+
             // Delay field (from servingLine.delay)
             if (includeDelay && dep["servingLine"].contains("delay")) {
                 try {
