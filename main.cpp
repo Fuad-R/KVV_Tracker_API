@@ -1,16 +1,16 @@
 #include "crow.h"
 #include <cpr/cpr.h>
 #include <nlohmann/json.hpp>
+#include <iostream>
 #include <string>
-#include <algorithm>
-#include <map>
+#include <vector>
 #include <mutex>
+#include <map>
 #include <chrono>
+#include <algorithm>
 #include <cctype>
 
 using json = nlohmann::json;
-
-
 
 // --- Cache Structure ---
 struct CacheEntry {
@@ -40,12 +40,13 @@ std::string toLower(const std::string& str) {
 json searchStopsKVV(const std::string& query, const std::string& city = "", bool includeLocation = false) {
     std::string wildCardQuery = query;
     if (wildCardQuery.empty()) return json::array();
+
     if (wildCardQuery.back() != '*') {
         wildCardQuery += "*";
     }
 
     cpr::Parameters params{
-        {"outputFormat", "rapidJSON"},
+        {"outputFormat", "JSON"},
         {"type_sf", "stop"},
         {"name_sf", wildCardQuery},
         {"anyObjFilter_sf", "2"},
@@ -97,6 +98,7 @@ json searchStopsKVV(const std::string& query, const std::string& city = "", bool
         }
 
         // --- SORTING LOGIC ---
+        // (Keep your existing sorting logic exactly as is)
         std::string targetCity = city.empty() ? DEFAULT_PRIORITY_REGION : city;
         targetCity = toLower(targetCity);
 
@@ -129,7 +131,7 @@ json fetchDeparturesKVV(const std::string& stopId) {
     cpr::Response r = cpr::Get(
         cpr::Url{KVV_DM_URL},
         cpr::Parameters{
-            {"outputFormat", "rapidJSON"},
+            {"outputFormat", "JSON"},
             {"depType", "stopEvents"},
             {"mode", "direct"},
             {"type_dm", "stop"},
@@ -168,16 +170,6 @@ json normalizeResponse(const json& kvvData, bool detailed = false, bool includeD
             item["line"] = dep["servingLine"].value("number", "?");
             item["direction"] = dep["servingLine"].value("direction", "Unknown");
 
-            // Vehicle Type (ALWAYS included)
-            if (dep["servingLine"].contains("product")) {
-                if (dep["servingLine"]["product"].contains("class")) {
-                    item["vehicle_type_id"] = dep["servingLine"]["product"].value("class", -1);
-                }
-                if (dep["servingLine"]["product"].contains("name")) {
-                    item["vehicle_type_name"] = dep["servingLine"]["product"].value("name", "Unknown");
-                }
-            }
-
             // Delay field (from servingLine.delay)
             if (includeDelay && dep["servingLine"].contains("delay")) {
                 try {
@@ -189,7 +181,7 @@ json normalizeResponse(const json& kvvData, bool detailed = false, bool includeD
             }
 
             if (detailed) {
-                // Accessibility parsing
+                // ... (rest of your detailed code stays the same)
                 bool hasPlanLowFloor = false;
                 bool hasPlanWheelchair = false;
                 bool planLowFloor = false;
@@ -199,8 +191,8 @@ json normalizeResponse(const json& kvvData, bool detailed = false, bool includeD
                     for (const auto& a : dep["attrs"]) {
                         std::string name = a.value("name", "");
                         std::string value = a.value("value", "");
-                        std::string lname = toLower(name);
 
+                        std::string lname = toLower(name);
                         if (lname == "planlowfloorvehicle") {
                             hasPlanLowFloor = true;
                             planLowFloor = strToBool(value);
@@ -217,13 +209,11 @@ json normalizeResponse(const json& kvvData, bool detailed = false, bool includeD
                 if (dep["servingLine"].contains("hints") && dep["servingLine"]["hints"].is_array()) {
                     for (const auto& h : dep["servingLine"]["hints"]) {
                         std::string txt = h.value("hint", h.value("content", ""));
-
                         if (txt.find("Niederflur") != std::string::npos ||
                             txt.find("low floor") != std::string::npos ||
                             txt.find("lowFloor") != std::string::npos) {
                             hintLowFloor = true;
                         }
-
                         if (txt.find("Rollstuhl") != std::string::npos ||
                             txt.find("wheelchair") != std::string::npos ||
                             txt.find("barrierefrei") != std::string::npos ||
@@ -350,12 +340,12 @@ int main() {
 
                 if (match) filteredDepartures.push_back(dep);
             }
-
             return crow::response(filteredDepartures.dump());
         }
 
         return crow::response(allDepartures.dump());
-    });
+});
+
 
     app.port(8080).multithreaded().run();
 }
