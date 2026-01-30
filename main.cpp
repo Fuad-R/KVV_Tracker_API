@@ -36,11 +36,11 @@ std::string toLower(const std::string& str) {
 }
 
 // --- Helper: Search Stops ---
+// Updated signature to accept includeLocation
 json searchStopsKVV(const std::string& query, const std::string& city = "", bool includeLocation = false) {
     std::string wildCardQuery = query;
     if (wildCardQuery.empty()) return json::array();
 
-    // Auto-append wildcard for broader matching if not present
     if (wildCardQuery.back() != '*') {
         wildCardQuery += "*";
     }
@@ -49,15 +49,11 @@ json searchStopsKVV(const std::string& query, const std::string& city = "", bool
         {"outputFormat", "JSON"},
         {"type_sf", "stop"},
         {"name_sf", wildCardQuery},
-        {"anyObjFilter_sf", "2"},      // Filter for stops only
+        {"anyObjFilter_sf", "2"},
         {"anyMaxSizeHitList", "100"},
-        {"coordOutputFormat", "WGS84[dd.ddddd]"} // Always request coordinates to be available for extraction
+        // Request standard GPS coordinates (Lon/Lat) instead of raw projection
+        {"coordOutputFormat", "WGS84[dd.ddddd]"}
     };
-
-    // INFLUENCE SEARCH: Pass city as 'place_sf' to upstream API if provided
-    if (!city.empty()) {
-        params.Add({"place_sf", city});
-    }
 
     cpr::Response r = cpr::Get(
         cpr::Url{KVV_SEARCH_URL},
@@ -84,23 +80,9 @@ json searchStopsKVV(const std::string& query, const std::string& city = "", bool
                         item["city"] = p.value("place", "");
                     }
 
-                    // --- NEW: Always return match metrics ---
-                    // "matchQuality" is usually an integer (lower is often better in some EFA versions, or higher in others; passing it raw)
-                    if (p.contains("matchQuality")) {
-                        item["matchQuality"] = p["matchQuality"];
-                    } else {
-                        item["matchQuality"] = 0;
-                    }
-
-                    // "isBest" is a boolean indicating the API's top pick
-                    if (p.contains("isBest")) {
-                        item["isBest"] = p.value("isBest", false);
-                    } else {
-                        item["isBest"] = false;
-                    }
-
-                    // --- NEW: Conditional Coordinate Extraction ---
+                    // --- NEW: Location Parsing ---
                     if (includeLocation && p.contains("ref") && p["ref"].contains("coords")) {
+                        // Returns string "8.401...,49.005..." (Lon,Lat)
                         item["coordinates"] = p["ref"].value("coords", "");
                     }
 
@@ -108,7 +90,6 @@ json searchStopsKVV(const std::string& query, const std::string& city = "", bool
                 }
             };
 
-            // Handle both single object and array responses
             if (points.is_array()) {
                 for (const auto& p : points) processPoint(p);
             } else if (points.is_object()) {
@@ -116,7 +97,28 @@ json searchStopsKVV(const std::string& query, const std::string& city = "", bool
             }
         }
 
-        // Sorting removed: Returns result in the order provided by KVV API
+        // --- SORTING LOGIC ---
+        // (Keep your existing sorting logic exactly as is)
+        std::string targetCity = city.empty() ? DEFAULT_PRIORITY_REGION : city;
+        targetCity = toLower(targetCity);
+
+        std::stable_sort(result.begin(), result.end(),
+            [&](const json& a, const json& b) {
+                std::string cityA = a.contains("city") ? toLower(a["city"]) : "";
+                std::string nameA = a.contains("name") ? toLower(a["name"]) : "";
+                std::string cityB = b.contains("city") ? toLower(b["city"]) : "";
+                std::string nameB = b.contains("name") ? toLower(b["name"]) : "";
+
+                bool aMatches = (cityA.find(targetCity) != std::string::npos) ||
+                                (nameA.find(targetCity) != std::string::npos);
+                bool bMatches = (cityB.find(targetCity) != std::string::npos) ||
+                                (nameB.find(targetCity) != std::string::npos);
+
+                if (aMatches && !bMatches) return true;
+                if (!aMatches && bMatches) return false;
+                return false;
+            });
+
         return result;
 
     } catch (...) {
