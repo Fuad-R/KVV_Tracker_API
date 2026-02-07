@@ -1,13 +1,14 @@
 #include "crow.h"
+
 #include <cpr/cpr.h>
 #include <nlohmann/json.hpp>
+
 #include <algorithm>
 #include <cctype>
 #include <chrono>
 #include <map>
 #include <mutex>
 #include <string>
-#include <vector>
 
 using json = nlohmann::json;
 
@@ -25,7 +26,7 @@ const int CACHE_TTL_SECONDS = 30;
 const std::string KVV_DM_URL     = "https://projekte.kvv-efa.de/sl3-alone/XSLT_DM_REQUEST";
 const std::string KVV_SEARCH_URL = "https://projekte.kvv-efa.de/sl3-alone/XSLT_STOPFINDER_REQUEST";
 
-// --- Helper: String Utilities ---
+// --- Helpers ---
 std::string toLower(const std::string& str) {
     std::string s = str;
     std::transform(s.begin(), s.end(), s.begin(),
@@ -73,38 +74,44 @@ static bool getBoolFieldLoose(const json& obj, const std::initializer_list<const
     return fallback;
 }
 
-// --- Helper: Search Stops ---
-// Requirements implemented:
-// - No default city priority.
-// - city=XXX is a preference passed upstream as anyResSort_sf=XXX.
-// - Return match_quality + is_best.
-// - Always sort by match_quality (descending); stable to preserve upstream order within ties.
+// --- Stop search ---
+// - city is a preference: passed upstream as anyResSort_sf=city (per PDF).
+// - returns match_quality + is_best.
+// - stable-sort by match_quality (desc) so upstream ordering (incl. anyResSort_sf) remains within ties.
 json searchStopsKVV(const std::string& query, const std::string& city = "", bool includeLocation = false) {
     std::string wildCardQuery = query;
     if (wildCardQuery.empty()) return json::array();
     if (wildCardQuery.back() != '*') wildCardQuery += "*";
 
-    std::vector<cpr::Pair> pairs = {
-        // KVV often accepts outputFormat=JSON; many EFA docs mention rapidJSON.
-        // Keep JSON here to match your existing working behavior; change to "rapidJSON" if your instance supports it.
-        {"outputFormat", "JSON"},
-        {"coordOutputFormat", "WGS84[dd.ddddd]"},
-        {"locationServerActive", "1"},
-
-        {"type_sf", "any"},
-        {"name_sf", wildCardQuery},
-
-        {"anyObjFilter_sf", "2"},
-        {"anyMaxSizeHitList", "100"}
-    };
-
-    // City preference: choose server-side sorter (per EFA StopFinder docs: anyResSort_<usage>, usage=sf)
-    if (!city.empty()) {
-        pairs.emplace_back("anyResSort_sf", city);
+    cpr::Response r;
+    if (city.empty()) {
+        r = cpr::Get(
+            cpr::Url{KVV_SEARCH_URL},
+            cpr::Parameters{
+                {"outputFormat", "JSON"},
+                {"coordOutputFormat", "WGS84[dd.ddddd]"},
+                {"locationServerActive", "1"},
+                {"type_sf", "any"},
+                {"name_sf", wildCardQuery},
+                {"anyObjFilter_sf", "2"},
+                {"anyMaxSizeHitList", "100"}
+            }
+        );
+    } else {
+        r = cpr::Get(
+            cpr::Url{KVV_SEARCH_URL},
+            cpr::Parameters{
+                {"outputFormat", "JSON"},
+                {"coordOutputFormat", "WGS84[dd.ddddd]"},
+                {"locationServerActive", "1"},
+                {"type_sf", "any"},
+                {"name_sf", wildCardQuery},
+                {"anyObjFilter_sf", "2"},
+                {"anyMaxSizeHitList", "100"},
+                {"anyResSort_sf", city}
+            }
+        );
     }
-
-    cpr::Response r = cpr::Get(cpr::Url{KVV_SEARCH_URL},
-                              cpr::Parameters(pairs.begin(), pairs.end()));
 
     if (r.status_code != 200) return {{"error", "Upstream Error"}};
 
@@ -144,17 +151,16 @@ json searchStopsKVV(const std::string& query, const std::string& city = "", bool
             }
         }
 
-        // Always order by match_quality (descending); preserve upstream order on ties
         std::stable_sort(result.begin(), result.end(),
             [&](const json& a, const json& b) {
                 int qa = a.value("match_quality", -1);
                 int qb = b.value("match_quality", -1);
                 if (qa != qb) return qa > qb;
-                return false;
+                return false; // preserve upstream order for ties
             }
         );
 
-        // If upstream didn't mark any is_best, infer it for the top match_quality group
+        // Infer is_best for top match_quality group if upstream didn't mark any.
         if (!result.empty()) {
             bool anyMarked = false;
             for (const auto& item : result) {
@@ -175,7 +181,7 @@ json searchStopsKVV(const std::string& query, const std::string& city = "", bool
     }
 }
 
-// --- Helper: Fetch Departures ---
+// --- Departures fetch ---
 json fetchDeparturesKVV(const std::string& stopId) {
     cpr::Response r = cpr::Get(
         cpr::Url{KVV_DM_URL},
@@ -199,7 +205,7 @@ json fetchDeparturesKVV(const std::string& stopId) {
     }
 }
 
-// --- Helper: Normalize Data ---
+// --- Normalize departures ---
 json normalizeResponse(const json& kvvData, bool detailed = false, bool includeDelay = false) {
     json result = json::array();
     if (!kvvData.contains("departureList") || !kvvData["departureList"].is_array()) return result;
@@ -221,9 +227,9 @@ json normalizeResponse(const json& kvvData, bool detailed = false, bool includeD
     for (const auto& dep : kvvData["departureList"]) {
         json item;
 
-        // Line info + delay + mot
         if (dep.contains("servingLine") && dep["servingLine"].is_object()) {
             const auto& sl = dep["servingLine"];
+
             item["line"] = sl.value("number", "?");
             item["direction"] = sl.value("direction", "Unknown");
 
@@ -283,26 +289,21 @@ json normalizeResponse(const json& kvvData, bool detailed = false, bool includeD
                 else if (sl.contains("trainComposition")) item["train_composition"] = sl.value("trainComposition", "");
             }
         } else {
-            // keep schema stable even if servingLine missing
             item["line"] = "?";
             item["direction"] = "Unknown";
             item["mot"] = -1;
             if (includeDelay) item["delay_minutes"] = 0;
         }
 
-        // Platform
         if (dep.contains("platform")) item["platform"] = dep.value("platform", "");
         else if (dep.contains("platformName")) item["platform"] = dep.value("platformName", "");
         else item["platform"] = "Unknown";
 
-        // Countdown
         if (dep.contains("countdown")) item["minutes_remaining"] = toIntSafe(dep["countdown"], 0);
         else item["minutes_remaining"] = 0;
 
-        // Realtime
         item["is_realtime"] = dep.contains("realDateTime");
 
-        // Departure hints (detailed)
         if (detailed && dep.contains("hints") && dep["hints"].is_array()) {
             json hintsArray = json::array();
             for (const auto& h : dep["hints"]) {
@@ -325,7 +326,7 @@ int main() {
     CROW_ROUTE(app, "/api/stops/search")
     ([](const crow::request& req) {
         const char* query = req.url_params.get("q");
-        const char* city = req.url_params.get("city");
+        const char* city  = req.url_params.get("city");
         const char* locationParam = req.url_params.get("location");
 
         bool includeLocation = parseBoolParam(locationParam);
@@ -396,7 +397,6 @@ int main() {
                     match = true;
                 } else if (platform.size() > reqTrackStr.size() &&
                            platform.substr(0, reqTrackStr.size()) == reqTrackStr) {
-                    // allow prefix matches like "5A" matching track=5 but not "50" matching track=5
                     if (!std::isdigit(static_cast<unsigned char>(platform[reqTrackStr.size()]))) match = true;
                 } else if (platform.find(" " + reqTrackStr) != std::string::npos ||
                            platform.find("Gleis " + reqTrackStr) != std::string::npos) {
