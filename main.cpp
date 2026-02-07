@@ -36,23 +36,17 @@ std::string toLower(const std::string& str) {
 }
 
 // --- Helper: Search Stops ---
-// Updated signature to accept includeLocation
+// Accepts 'city' parameter but ignores it (no-op)
 json searchStopsKVV(const std::string& query, const std::string& city = "", bool includeLocation = false) {
-    std::string wildCardQuery = query;
-    if (wildCardQuery.empty()) return json::array();
+    if (query.empty()) return json::array();
 
-    if (wildCardQuery.back() != '*') {
-        wildCardQuery += "*";
-    }
-
+    // Configuration based on the user's sample and PDF
     cpr::Parameters params{
-        {"outputFormat", "JSON"},
-        {"type_sf", "stop"},
-        {"name_sf", wildCardQuery},
-        {"anyObjFilter_sf", "2"},
-        {"anyMaxSizeHitList", "100"},
-        // Request standard GPS coordinates (Lon/Lat) instead of raw projection
-        {"coordOutputFormat", "WGS84[dd.ddddd]"}
+            {"outputFormat", "rapidJSON"},
+            {"type_sf", "any"},
+            {"name_sf", query},
+            {"anyObjFilter_sf", "2"}, // Filter for stops/stations
+            {"coordOutputFormat", "WGS84[dd.ddddd]"} // Request decimal coordinates
     };
 
     cpr::Response r = cpr::Get(
@@ -63,64 +57,7 @@ json searchStopsKVV(const std::string& query, const std::string& city = "", bool
     if (r.status_code != 200) return {{"error", "Upstream Error"}};
 
     try {
-        json raw = json::parse(r.text);
-        json result = json::array();
-
-        if (raw.contains("stopFinder") && raw["stopFinder"].contains("points")) {
-            auto& points = raw["stopFinder"]["points"];
-
-            auto processPoint = [&](const json& p) {
-                if (p.contains("stateless")) {
-                    json item = {
-                        {"id", p.value("stateless", "")},
-                        {"name", p.value("name", "Unknown")}
-                    };
-
-                    if (p.contains("place")) {
-                        item["city"] = p.value("place", "");
-                    }
-
-                    // --- NEW: Location Parsing ---
-                    if (includeLocation && p.contains("ref") && p["ref"].contains("coords")) {
-                        // Returns string "8.401...,49.005..." (Lon,Lat)
-                        item["coordinates"] = p["ref"].value("coords", "");
-                    }
-
-                    result.push_back(item);
-                }
-            };
-
-            if (points.is_array()) {
-                for (const auto& p : points) processPoint(p);
-            } else if (points.is_object()) {
-                processPoint(points);
-            }
-        }
-
-        // --- SORTING LOGIC ---
-        // (Keep your existing sorting logic exactly as is)
-        std::string targetCity = city.empty() ? DEFAULT_PRIORITY_REGION : city;
-        targetCity = toLower(targetCity);
-
-        std::stable_sort(result.begin(), result.end(),
-            [&](const json& a, const json& b) {
-                std::string cityA = a.contains("city") ? toLower(a["city"]) : "";
-                std::string nameA = a.contains("name") ? toLower(a["name"]) : "";
-                std::string cityB = b.contains("city") ? toLower(b["city"]) : "";
-                std::string nameB = b.contains("name") ? toLower(b["name"]) : "";
-
-                bool aMatches = (cityA.find(targetCity) != std::string::npos) ||
-                                (nameA.find(targetCity) != std::string::npos);
-                bool bMatches = (cityB.find(targetCity) != std::string::npos) ||
-                                (nameB.find(targetCity) != std::string::npos);
-
-                if (aMatches && !bMatches) return true;
-                if (!aMatches && bMatches) return false;
-                return false;
-            });
-
-        return result;
-
+        return json::parse(r.text);
     } catch (...) {
         return {{"error", "Invalid JSON from KVV Search"}};
     }
