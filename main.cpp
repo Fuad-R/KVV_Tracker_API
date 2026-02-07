@@ -23,9 +23,8 @@ std::map<std::string, CacheEntry> stop_cache;
 const int CACHE_TTL_SECONDS = 30;
 
 // --- Configuration ---
-const std::string KVV_DM_URL = "https://projekte.kvv-efa.de/sl3-alone/XSLT_DM_REQUEST";
-const std::string KVV_SEARCH_URL = "https://projekte.kvv-efa.de/sl3-alone/XSLT_STOPFINDER_REQUEST";
-const std::string DEFAULT_PRIORITY_REGION = "karlsruhe"; // Fallback priority if no city is requested
+const std::string Provider_DM_URL = "https://projekte.kvv-efa.de/sl3-alone/XSLT_DM_REQUEST";
+const std::string Provider_SEARCH_URL = "https://projekte.kvv-efa.de/sl3-alone/XSLT_STOPFINDER_REQUEST";
 
 // --- Helper: String Utilities ---
 std::string toLower(const std::string& str) {
@@ -37,7 +36,7 @@ std::string toLower(const std::string& str) {
 
 // --- Helper: Search Stops ---
 // Accepts 'city' parameter but ignores it (no-op)
-json searchStopsKVV(const std::string& query, const std::string& city = "", bool includeLocation = false) {
+json searchStopsProvider(const std::string& query, const std::string& city = "", bool includeLocation = false) {
     if (query.empty()) return json::array();
 
     // Configuration based on the user's sample and PDF
@@ -50,7 +49,7 @@ json searchStopsKVV(const std::string& query, const std::string& city = "", bool
     };
 
     cpr::Response r = cpr::Get(
-        cpr::Url{KVV_SEARCH_URL},
+        cpr::Url{Provider_SEARCH_URL},
         params
     );
 
@@ -59,14 +58,14 @@ json searchStopsKVV(const std::string& query, const std::string& city = "", bool
     try {
         return json::parse(r.text);
     } catch (...) {
-        return {{"error", "Invalid JSON from KVV Search"}};
+        return {{"error", "Invalid JSON from Provider Search"}};
     }
 }
 
 // --- Helper: Fetch Departures ---
-json fetchDeparturesKVV(const std::string& stopId) {
+json fetchDeparturesProvider(const std::string& stopId) {
     cpr::Response r = cpr::Get(
-        cpr::Url{KVV_DM_URL},
+        cpr::Url{Provider_DM_URL},
         cpr::Parameters{
             {"outputFormat", "JSON"},
             {"depType", "stopEvents"},
@@ -78,19 +77,19 @@ json fetchDeparturesKVV(const std::string& stopId) {
         }
     );
 
-    if (r.status_code != 200) return {{"error", "Upstream KVV error"}, {"code", r.status_code}};
+    if (r.status_code != 200) return {{"error", "Upstream Provider error"}, {"code", r.status_code}};
 
     try {
         return json::parse(r.text);
     } catch (...) {
-        return {{"error", "Invalid JSON from KVV"}};
+        return {{"error", "Invalid JSON from Provider"}};
     }
 }
 
 // --- Helper: Normalize Data ---
-json normalizeResponse(const json& kvvData, bool detailed = false, bool includeDelay = false) {
+json normalizeResponse(const json& ProviderData, bool detailed = false, bool includeDelay = false) {
     json result = json::array();
-    if (!kvvData.contains("departureList")) return result;
+    if (!ProviderData.contains("departureList")) return result;
 
     auto strToBool = [](const std::string& v) {
         std::string s = v;
@@ -99,7 +98,7 @@ json normalizeResponse(const json& kvvData, bool detailed = false, bool includeD
         return (s == "1" || s == "true" || s == "yes");
     };
 
-    for (const auto& dep : kvvData["departureList"]) {
+    for (const auto& dep : ProviderData["departureList"]) {
         json item;
 
         // Line Info
@@ -224,7 +223,7 @@ int main() {
 
         if (!query) return crow::response(400, "Missing 'q' parameter");
 
-        auto response = crow::response(searchStopsKVV(std::string(query), city ? std::string(city) : "", includeLocation).dump());
+        auto response = crow::response(searchStopsProvider(std::string(query), city ? std::string(city) : "", includeLocation).dump());
         response.set_header("Content-Type", "application/json");
         return response;
 
@@ -257,7 +256,7 @@ int main() {
         }
 
         if (!cacheHit) {
-            json rawData = fetchDeparturesKVV(stopId);
+            json rawData = fetchDeparturesProvider(stopId);
             if (rawData.contains("error")) return crow::response(502, rawData.dump());
 
             allDepartures = normalizeResponse(rawData, detailed, includeDelay);
