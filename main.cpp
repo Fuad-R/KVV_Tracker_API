@@ -1,14 +1,13 @@
 #include "crow.h"
 #include <cpr/cpr.h>
 #include <nlohmann/json.hpp>
-#include <iostream>
-#include <string>
-#include <vector>
-#include <mutex>
-#include <map>
-#include <chrono>
 #include <algorithm>
 #include <cctype>
+#include <chrono>
+#include <map>
+#include <mutex>
+#include <string>
+#include <vector>
 
 using json = nlohmann::json;
 
@@ -23,42 +22,89 @@ std::map<std::string, CacheEntry> stop_cache;
 const int CACHE_TTL_SECONDS = 30;
 
 // --- Configuration ---
-const std::string KVV_DM_URL = "https://projekte.kvv-efa.de/sl3-alone/XSLT_DM_REQUEST";
+const std::string KVV_DM_URL     = "https://projekte.kvv-efa.de/sl3-alone/XSLT_DM_REQUEST";
 const std::string KVV_SEARCH_URL = "https://projekte.kvv-efa.de/sl3-alone/XSLT_STOPFINDER_REQUEST";
-const std::string DEFAULT_PRIORITY_REGION = "karlsruhe"; // Fallback priority if no city is requested
 
 // --- Helper: String Utilities ---
 std::string toLower(const std::string& str) {
     std::string s = str;
     std::transform(s.begin(), s.end(), s.begin(),
-                   [](unsigned char c){ return std::tolower(c); });
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     return s;
 }
 
+static bool parseBoolParam(const char* v) {
+    if (!v) return false;
+    std::string s = toLower(std::string(v));
+    return (s == "true" || s == "1" || s == "yes");
+}
+
+static int parseIntLoose(const json& v, int fallback = -1) {
+    try {
+        if (v.is_number_integer()) return v.get<int>();
+        if (v.is_number()) return static_cast<int>(v.get<double>());
+        if (v.is_string()) return std::stoi(v.get<std::string>());
+    } catch (...) {
+    }
+    return fallback;
+}
+
+static int getIntFieldLoose(const json& obj, const std::initializer_list<const char*>& keys, int fallback = -1) {
+    for (const char* k : keys) {
+        if (obj.contains(k)) return parseIntLoose(obj.at(k), fallback);
+    }
+    return fallback;
+}
+
+static bool getBoolFieldLoose(const json& obj, const std::initializer_list<const char*>& keys, bool fallback = false) {
+    for (const char* k : keys) {
+        if (!obj.contains(k)) continue;
+        const auto& v = obj.at(k);
+        try {
+            if (v.is_boolean()) return v.get<bool>();
+            if (v.is_number_integer()) return v.get<int>() != 0;
+            if (v.is_string()) {
+                std::string s = toLower(v.get<std::string>());
+                return (s == "true" || s == "1" || s == "yes");
+            }
+        } catch (...) {
+        }
+    }
+    return fallback;
+}
+
 // --- Helper: Search Stops ---
-// Updated signature to accept includeLocation
+// Requirements implemented:
+// - No default city priority.
+// - city=XXX is a preference passed upstream as anyResSort_sf=XXX.
+// - Return match_quality + is_best.
+// - Always sort by match_quality (descending); stable to preserve upstream order within ties.
 json searchStopsKVV(const std::string& query, const std::string& city = "", bool includeLocation = false) {
     std::string wildCardQuery = query;
     if (wildCardQuery.empty()) return json::array();
+    if (wildCardQuery.back() != '*') wildCardQuery += "*";
 
-    if (wildCardQuery.back() != '*') {
-        wildCardQuery += "*";
-    }
-
-    cpr::Parameters params{
+    std::vector<cpr::Pair> pairs = {
+        // KVV often accepts outputFormat=JSON; many EFA docs mention rapidJSON.
+        // Keep JSON here to match your existing working behavior; change to "rapidJSON" if your instance supports it.
         {"outputFormat", "JSON"},
-        {"type_sf", "stop"},
+        {"coordOutputFormat", "WGS84[dd.ddddd]"},
+        {"locationServerActive", "1"},
+
+        {"type_sf", "any"},
         {"name_sf", wildCardQuery},
+
         {"anyObjFilter_sf", "2"},
-        {"anyMaxSizeHitList", "100"},
-        // Request standard GPS coordinates (Lon/Lat) instead of raw projection
-        {"coordOutputFormat", "WGS84[dd.ddddd]"}
+        {"anyMaxSizeHitList", "100"}
     };
 
-    cpr::Response r = cpr::Get(
-        cpr::Url{KVV_SEARCH_URL},
-        params
-    );
+    // City preference: choose server-side sorter (per EFA StopFinder docs: anyResSort_<usage>, usage=sf)
+    if (!city.empty()) {
+        pairs.emplace_back("anyResSort_sf", city);
+    }
+
+    cpr::Response r = cpr::Get(cpr::Url{KVV_SEARCH_URL},
+                              cpr::Parameters(pairs.begin(), pairs.end()));
 
     if (r.status_code != 200) return {{"error", "Upstream Error"}};
 
@@ -67,27 +113,28 @@ json searchStopsKVV(const std::string& query, const std::string& city = "", bool
         json result = json::array();
 
         if (raw.contains("stopFinder") && raw["stopFinder"].contains("points")) {
-            auto& points = raw["stopFinder"]["points"];
+            const auto& points = raw["stopFinder"]["points"];
 
             auto processPoint = [&](const json& p) {
-                if (p.contains("stateless")) {
-                    json item = {
-                        {"id", p.value("stateless", "")},
-                        {"name", p.value("name", "Unknown")}
-                    };
+                if (!p.contains("stateless")) return;
 
-                    if (p.contains("place")) {
-                        item["city"] = p.value("place", "");
-                    }
+                int matchQ = getIntFieldLoose(p, {"matchQuality", "matchquality", "quality"}, -1);
+                bool isBest = getBoolFieldLoose(p, {"isBest", "isbest"}, false);
 
-                    // --- NEW: Location Parsing ---
-                    if (includeLocation && p.contains("ref") && p["ref"].contains("coords")) {
-                        // Returns string "8.401...,49.005..." (Lon,Lat)
-                        item["coordinates"] = p["ref"].value("coords", "");
-                    }
+                json item = {
+                    {"id", p.value("stateless", "")},
+                    {"name", p.value("name", "Unknown")},
+                    {"match_quality", matchQ},
+                    {"is_best", isBest}
+                };
 
-                    result.push_back(item);
+                if (p.contains("place")) item["city"] = p.value("place", "");
+
+                if (includeLocation && p.contains("ref") && p["ref"].contains("coords")) {
+                    item["coordinates"] = p["ref"].value("coords", "");
                 }
+
+                result.push_back(std::move(item));
             };
 
             if (points.is_array()) {
@@ -97,30 +144,32 @@ json searchStopsKVV(const std::string& query, const std::string& city = "", bool
             }
         }
 
-        // --- SORTING LOGIC ---
-        // (Keep your existing sorting logic exactly as is)
-        std::string targetCity = city.empty() ? DEFAULT_PRIORITY_REGION : city;
-        targetCity = toLower(targetCity);
-
+        // Always order by match_quality (descending); preserve upstream order on ties
         std::stable_sort(result.begin(), result.end(),
             [&](const json& a, const json& b) {
-                std::string cityA = a.contains("city") ? toLower(a["city"]) : "";
-                std::string nameA = a.contains("name") ? toLower(a["name"]) : "";
-                std::string cityB = b.contains("city") ? toLower(b["city"]) : "";
-                std::string nameB = b.contains("name") ? toLower(b["name"]) : "";
-
-                bool aMatches = (cityA.find(targetCity) != std::string::npos) ||
-                                (nameA.find(targetCity) != std::string::npos);
-                bool bMatches = (cityB.find(targetCity) != std::string::npos) ||
-                                (nameB.find(targetCity) != std::string::npos);
-
-                if (aMatches && !bMatches) return true;
-                if (!aMatches && bMatches) return false;
+                int qa = a.value("match_quality", -1);
+                int qb = b.value("match_quality", -1);
+                if (qa != qb) return qa > qb;
                 return false;
-            });
+            }
+        );
+
+        // If upstream didn't mark any is_best, infer it for the top match_quality group
+        if (!result.empty()) {
+            bool anyMarked = false;
+            for (const auto& item : result) {
+                if (item.value("is_best", false)) { anyMarked = true; break; }
+            }
+
+            int topQ = result[0].value("match_quality", -1);
+            if (!anyMarked && topQ >= 0) {
+                for (auto& item : result) {
+                    item["is_best"] = (item.value("match_quality", -1) == topQ);
+                }
+            }
+        }
 
         return result;
-
     } catch (...) {
         return {{"error", "Invalid JSON from KVV Search"}};
     }
@@ -153,53 +202,48 @@ json fetchDeparturesKVV(const std::string& stopId) {
 // --- Helper: Normalize Data ---
 json normalizeResponse(const json& kvvData, bool detailed = false, bool includeDelay = false) {
     json result = json::array();
-    if (!kvvData.contains("departureList")) return result;
+    if (!kvvData.contains("departureList") || !kvvData["departureList"].is_array()) return result;
 
     auto strToBool = [](const std::string& v) {
-        std::string s = v;
-        std::transform(s.begin(), s.end(), s.begin(),
-                       [](unsigned char c){ return std::tolower(c); });
+        std::string s = toLower(v);
         return (s == "1" || s == "true" || s == "yes");
+    };
+
+    auto toIntSafe = [](const json& v, int fallback = 0) -> int {
+        try {
+            if (v.is_number_integer()) return v.get<int>();
+            if (v.is_number()) return static_cast<int>(v.get<double>());
+            if (v.is_string()) return std::stoi(v.get<std::string>());
+        } catch (...) {}
+        return fallback;
     };
 
     for (const auto& dep : kvvData["departureList"]) {
         json item;
 
-        // Line Info
-        if (dep.contains("servingLine")) {
-            item["line"] = dep["servingLine"].value("number", "?");
-            item["direction"] = dep["servingLine"].value("direction", "Unknown");
+        // Line info + delay + mot
+        if (dep.contains("servingLine") && dep["servingLine"].is_object()) {
+            const auto& sl = dep["servingLine"];
+            item["line"] = sl.value("number", "?");
+            item["direction"] = sl.value("direction", "Unknown");
 
-            // ADD THIS: Extract MOT (Mode of Transport)
-            if (dep["servingLine"].contains("motType")) {
-                item["mot"] = std::stoi(dep["servingLine"].value("motType", "-1"));
-            } else {
-                item["mot"] = -1; // Unknown/not provided
-            }
+            if (sl.contains("motType")) item["mot"] = toIntSafe(sl["motType"], -1);
+            else item["mot"] = -1;
 
-            // Delay field (from servingLine.delay)
-            if (includeDelay && dep["servingLine"].contains("delay")) {
-                try {
-                    int delayMinutes = std::stoi(dep["servingLine"].value("delay", "0"));
-                    item["delay_minutes"] = delayMinutes;
-                } catch (...) {
-                    item["delay_minutes"] = 0;
-                }
+            if (includeDelay && sl.contains("delay")) {
+                item["delay_minutes"] = toIntSafe(sl["delay"], 0);
             }
 
             if (detailed) {
-                // ... (rest of your detailed code stays the same)
-                bool hasPlanLowFloor = false;
-                bool hasPlanWheelchair = false;
-                bool planLowFloor = false;
-                bool planWheelchair = false;
+                bool hasPlanLowFloor = false, hasPlanWheelchair = false;
+                bool planLowFloor = false, planWheelchair = false;
 
                 if (dep.contains("attrs") && dep["attrs"].is_array()) {
                     for (const auto& a : dep["attrs"]) {
                         std::string name = a.value("name", "");
                         std::string value = a.value("value", "");
-
                         std::string lname = toLower(name);
+
                         if (lname == "planlowfloorvehicle") {
                             hasPlanLowFloor = true;
                             planLowFloor = strToBool(value);
@@ -210,11 +254,9 @@ json normalizeResponse(const json& kvvData, bool detailed = false, bool includeD
                     }
                 }
 
-                bool hintLowFloor = false;
-                bool hintWheelchair = false;
-
-                if (dep["servingLine"].contains("hints") && dep["servingLine"]["hints"].is_array()) {
-                    for (const auto& h : dep["servingLine"]["hints"]) {
+                bool hintLowFloor = false, hintWheelchair = false;
+                if (sl.contains("hints") && sl["hints"].is_array()) {
+                    for (const auto& h : sl["hints"]) {
                         std::string txt = h.value("hint", h.value("content", ""));
                         if (txt.find("Niederflur") != std::string::npos ||
                             txt.find("low floor") != std::string::npos ||
@@ -236,13 +278,16 @@ json normalizeResponse(const json& kvvData, bool detailed = false, bool includeD
                 item["low_floor"] = lowFloor;
                 item["wheelchair_accessible"] = wheelchair || lowFloor;
 
-                if (dep["servingLine"].contains("trainType"))
-                    item["train_type"] = dep["servingLine"].value("trainType", "");
-                if (dep["servingLine"].contains("trainLength"))
-                    item["train_length"] = dep["servingLine"].value("trainLength", "");
-                else if (dep["servingLine"].contains("trainComposition"))
-                    item["train_composition"] = dep["servingLine"].value("trainComposition", "");
+                if (sl.contains("trainType")) item["train_type"] = sl.value("trainType", "");
+                if (sl.contains("trainLength")) item["train_length"] = sl.value("trainLength", "");
+                else if (sl.contains("trainComposition")) item["train_composition"] = sl.value("trainComposition", "");
             }
+        } else {
+            // keep schema stable even if servingLine missing
+            item["line"] = "?";
+            item["direction"] = "Unknown";
+            item["mot"] = -1;
+            if (includeDelay) item["delay_minutes"] = 0;
         }
 
         // Platform
@@ -251,13 +296,13 @@ json normalizeResponse(const json& kvvData, bool detailed = false, bool includeD
         else item["platform"] = "Unknown";
 
         // Countdown
-        if (dep.contains("countdown")) item["minutes_remaining"] = std::stoi(dep.value("countdown", "0"));
+        if (dep.contains("countdown")) item["minutes_remaining"] = toIntSafe(dep["countdown"], 0);
         else item["minutes_remaining"] = 0;
 
         // Realtime
         item["is_realtime"] = dep.contains("realDateTime");
 
-        // Hints
+        // Departure hints (detailed)
         if (detailed && dep.contains("hints") && dep["hints"].is_array()) {
             json hintsArray = json::array();
             for (const auto& h : dep["hints"]) {
@@ -267,7 +312,7 @@ json normalizeResponse(const json& kvvData, bool detailed = false, bool includeD
             if (!hintsArray.empty()) item["hints"] = hintsArray;
         }
 
-        result.push_back(item);
+        result.push_back(std::move(item));
     }
 
     return result;
@@ -278,38 +323,44 @@ int main() {
 
     // Search Endpoint
     CROW_ROUTE(app, "/api/stops/search")
-    ([](const crow::request& req){
-        auto query = req.url_params.get("q");
-        auto city = req.url_params.get("city");
-        auto locationParam = req.url_params.get("location");
+    ([](const crow::request& req) {
+        const char* query = req.url_params.get("q");
+        const char* city = req.url_params.get("city");
+        const char* locationParam = req.url_params.get("location");
 
-        bool includeLocation = (locationParam && (std::string(locationParam) == "true" || std::string(locationParam) == "1"));
+        bool includeLocation = parseBoolParam(locationParam);
 
         if (!query) return crow::response(400, "Missing 'q' parameter");
 
-        return crow::response(searchStopsKVV(std::string(query), city ? std::string(city) : "", includeLocation).dump());
+        json out = searchStopsKVV(std::string(query),
+                                  city ? std::string(city) : "",
+                                  includeLocation);
+
+        crow::response res(out.dump());
+        res.add_header("Content-Type", "application/json");
+        return res;
     });
 
     // Departures Endpoint
     CROW_ROUTE(app, "/api/stops/<string>")
-    ([](const crow::request& req, std::string stopId){
-        const char* detailedParam = req.url_params.get("detailed");
-        const char* delayParam = req.url_params.get("delay");
+    ([](const crow::request& req, std::string stopId) {
+        bool detailed = parseBoolParam(req.url_params.get("detailed"));
+        bool includeDelay = parseBoolParam(req.url_params.get("delay"));
 
-        bool detailed = (detailedParam && (std::string(detailedParam) == "true" || std::string(detailedParam) == "1"));
-        bool includeDelay = (delayParam && (std::string(delayParam) == "true" || std::string(delayParam) == "1"));
+        std::string cacheKey = stopId +
+            (detailed ? "_detailed" : "") +
+            (includeDelay ? "_delay" : "");
 
-        // Cache Check - include delay in cache key
         json allDepartures;
         bool cacheHit = false;
-        std::string cacheKey = stopId + (detailed ? "_detailed" : "") + (includeDelay ? "_delay" : "");
 
         {
             std::lock_guard<std::mutex> lock(cache_mutex);
             auto it = stop_cache.find(cacheKey);
             if (it != stop_cache.end()) {
                 auto now = std::chrono::steady_clock::now();
-                if (std::chrono::duration_cast<std::chrono::seconds>(now - it->second.timestamp).count() < CACHE_TTL_SECONDS) {
+                auto age = std::chrono::duration_cast<std::chrono::seconds>(now - it->second.timestamp).count();
+                if (age < CACHE_TTL_SECONDS) {
                     allDepartures = it->second.data;
                     cacheHit = true;
                 }
@@ -318,18 +369,24 @@ int main() {
 
         if (!cacheHit) {
             json rawData = fetchDeparturesKVV(stopId);
-            if (rawData.contains("error")) return crow::response(502, rawData.dump());
+            if (rawData.contains("error")) {
+                crow::response res(502, rawData.dump());
+                res.add_header("Content-Type", "application/json");
+                return res;
+            }
 
             allDepartures = normalizeResponse(rawData, detailed, includeDelay);
 
-            std::lock_guard<std::mutex> lock(cache_mutex);
-            stop_cache[cacheKey] = {allDepartures, std::chrono::steady_clock::now()};
+            {
+                std::lock_guard<std::mutex> lock(cache_mutex);
+                stop_cache[cacheKey] = {allDepartures, std::chrono::steady_clock::now()};
+            }
         }
 
         const char* requestedTrack = req.url_params.get("track");
         if (requestedTrack) {
-            json filteredDepartures = json::array();
             std::string reqTrackStr = std::string(requestedTrack);
+            json filtered = json::array();
 
             for (const auto& dep : allDepartures) {
                 std::string platform = dep.value("platform", "");
@@ -339,20 +396,26 @@ int main() {
                     match = true;
                 } else if (platform.size() > reqTrackStr.size() &&
                            platform.substr(0, reqTrackStr.size()) == reqTrackStr) {
-                    if (!isdigit(platform[reqTrackStr.size()])) match = true;
+                    // allow prefix matches like "5A" matching track=5 but not "50" matching track=5
+                    if (!std::isdigit(static_cast<unsigned char>(platform[reqTrackStr.size()]))) match = true;
                 } else if (platform.find(" " + reqTrackStr) != std::string::npos ||
                            platform.find("Gleis " + reqTrackStr) != std::string::npos) {
                     match = true;
                 }
 
-                if (match) filteredDepartures.push_back(dep);
+                if (match) filtered.push_back(dep);
             }
-            return crow::response(filteredDepartures.dump());
+
+            crow::response res(filtered.dump());
+            res.add_header("Content-Type", "application/json");
+            return res;
         }
 
-        return crow::response(allDepartures.dump());
-});
-
+        crow::response res(allDepartures.dump());
+        res.add_header("Content-Type", "application/json");
+        return res;
+    });
 
     app.port(8080).multithreaded().run();
+    return 0;
 }
