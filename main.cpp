@@ -224,7 +224,10 @@ int main() {
 
         if (!query) return crow::response(400, "Missing 'q' parameter");
 
-        return crow::response(searchStopsKVV(std::string(query), city ? std::string(city) : "", includeLocation).dump());
+        auto response = crow::response(searchStopsKVV(std::string(query), city ? std::string(city) : "", includeLocation).dump());
+        response.set_header("Content-Type", "application/json");
+        return response;
+
     });
 
     // Departures Endpoint
