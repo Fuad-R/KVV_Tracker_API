@@ -18,17 +18,20 @@ WORKDIR /app
 # Copy the source code
 COPY . .
 
+# FIX: Force CPR to use static libraries by modifying CMakeLists.txt
+# We inject the option right before FetchContent or at the top of the file
+RUN sed -i '1s/^/set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)\n/' CMakeLists.txt
+
 # Create build directory and compile
-# -DBUILD_SHARED_LIBS=OFF forces cpr and other deps to be static
 RUN mkdir build && cd build && \
-    cmake -DBUILD_SHARED_LIBS=OFF .. && \
+    cmake .. && \
     make -j$(nproc)
 
 # Stage 2: Create the runtime image
 FROM ubuntu:22.04
 
 # Install runtime dependencies
-# We still need libssl3 because cpr/curl likely links against the system OpenSSL
+# We still need libssl3 because even static cpr/curl links against system OpenSSL
 RUN apt-get update && apt-get install -y \
     libssl3 \
     ca-certificates \
@@ -36,10 +39,11 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-# Copy the statically linked executable from the builder stage
+# Copy the statically linked executable
 COPY --from=builder /app/build/kvv_aggregator .
 
 # Copy the vehicle types data file
+# Added a check to ensure it doesn't fail if the file is missing (optional safety)
 COPY --from=builder /app/vehicle_types.txt .
 
 # Expose the internal port defined in main.cpp

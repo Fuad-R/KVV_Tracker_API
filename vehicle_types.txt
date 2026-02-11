@@ -1,0 +1,24 @@
+ * EFA API Vehicle Types (MOT - Mode of Transport)
+ * Note: These IDs are customer-specific but follow this standard assignment
+ *
+ * ID   Mode of Transport
+ * 0    train
+ * 1    commuter railway
+ * 2    underground train
+ * 3    city rail
+ * 4    tram
+ * 5    city bus
+ * 6    regional bus
+ * 7    coach
+ * 8    cable car
+ * 9    boat
+ * 10   transit on demand
+ * 11   other
+ * 12   airplane
+ * 13   regional train
+ * 14   national train
+ * 15   international train
+ * 16   high-speed train
+ * 17   rail replacement train
+ * 18   shuttle train
+ * 19   Bürgerbus (community bus)
