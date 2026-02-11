@@ -5,11 +5,6 @@ FROM ubuntu:22.04 AS builder
 ENV DEBIAN_FRONTEND=noninteractive
 
 # Install build dependencies
-# cmake: for build system
-# build-essential: for g++ and make
-# git: for FetchContent to download dependencies (Crow, json, etc.)
-# libssl-dev: required by cpr and Crow (if using SSL)
-# ca-certificates: to verify SSL connections during fetch
 RUN apt-get update && apt-get install -y \
     cmake \
     build-essential \
@@ -24,15 +19,16 @@ WORKDIR /app
 COPY . .
 
 # Create build directory and compile
-# The app uses C++17 and FetchContent for dependencies
+# -DBUILD_SHARED_LIBS=OFF forces cpr and other deps to be static
 RUN mkdir build && cd build && \
-    cmake .. && \
+    cmake -DBUILD_SHARED_LIBS=OFF .. && \
     make -j$(nproc)
 
 # Stage 2: Create the runtime image
 FROM ubuntu:22.04
 
-# Install runtime dependencies (OpenSSL is needed for HTTPS requests to KVV)
+# Install runtime dependencies
+# We still need libssl3 because cpr/curl likely links against the system OpenSSL
 RUN apt-get update && apt-get install -y \
     libssl3 \
     ca-certificates \
@@ -40,11 +36,10 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-# Copy the compiled executable from the builder stage
-# The CMakeLists.txt defines the executable name as "kvv_aggregator"
+# Copy the statically linked executable from the builder stage
 COPY --from=builder /app/build/kvv_aggregator .
 
-# Copy any necessary static files if needed (e.g., vehicle_types.txt if used at runtime)
+# Copy the vehicle types data file
 COPY --from=builder /app/vehicle_types.txt .
 
 # Expose the internal port defined in main.cpp
