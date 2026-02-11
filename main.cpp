@@ -278,7 +278,7 @@ int main() {
                     match = true;
                 } else if (platform.size() > reqTrackStr.size() &&
                            platform.substr(0, reqTrackStr.size()) == reqTrackStr) {
-                    if (!isdigit(platform[reqTrackStr.size()])) match = true;
+                    if (!std::isdigit(static_cast<unsigned char>(platform[reqTrackStr.size()]))) match = true;
                 } else if (platform.find(" " + reqTrackStr) != std::string::npos ||
                            platform.find("Gleis " + reqTrackStr) != std::string::npos) {
                     match = true;
