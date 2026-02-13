@@ -292,6 +292,5 @@ int main() {
         return crow::response(allDepartures.dump());
 });
 
-
     app.port(8080).multithreaded().run();
 }
