@@ -46,6 +46,21 @@ Search for transit stops by name.
 ## Database Configuration
 Stop search persistence reads PostgreSQL connection values from `db_connection.txt` in the repository root.
 Copy `db_connection.txt.example` to `db_connection.txt` and update the values (the `sslmode` entry is optional).
+If the file is missing or incomplete, stop searches still respond, but no stops are persisted.
+
+The database must include the following schema:
+```
+CREATE TABLE stops (
+   stop_id TEXT PRIMARY KEY,
+   stop_name TEXT NOT NULL,
+   city TEXT,
+   mot SMALLINT[],
+   location GEOGRAPHY(Point, 4326) NOT NULL,
+   original_search TEXT,
+   created TIMESTAMPTZ DEFAULT NOW(),
+   last_updated TIMESTAMPTZ DEFAULT NOW()
+);
+```
 
 ### Get Departures
 **`GET /api/stops/{stopId}`**
