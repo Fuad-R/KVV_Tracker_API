@@ -26,6 +26,7 @@
 *.out
 *.a
 build/
+db_connection.txt
 
 ### Windows ###
 # Windows operating system specific files

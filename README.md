@@ -45,7 +45,7 @@ Search for transit stops by name.
 
 ## Database Configuration
 Stop search persistence reads PostgreSQL connection values from `db_connection.txt` in the repository root.
-Update that file with your database credentials before running the API.
+Copy `db_connection.txt.example` to `db_connection.txt` and update the values (the `sslmode` entry is optional).
 
 ### Get Departures
 **`GET /api/stops/{stopId}`**
