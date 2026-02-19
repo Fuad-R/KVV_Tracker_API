@@ -93,15 +93,18 @@ std::optional<DbConfig> loadDbConfig(const std::string& path) {
     return config;
 }
 
-std::string buildConnectionString(const DbConfig& config) {
-    std::ostringstream conn;
-    conn << "host=" << config.host
-         << " port=" << config.port
-         << " dbname=" << config.dbname
-         << " user=" << config.user
-         << " password=" << config.password;
-    if (!config.sslmode.empty()) conn << " sslmode=" << config.sslmode;
-    return conn.str();
+PGconn* connectToDatabase(const DbConfig& config) {
+    const char* keywords[] = {"host", "port", "dbname", "user", "password", "sslmode", nullptr};
+    const char* values[] = {
+        config.host.c_str(),
+        config.port.c_str(),
+        config.dbname.c_str(),
+        config.user.c_str(),
+        config.password.c_str(),
+        config.sslmode.empty() ? nullptr : config.sslmode.c_str(),
+        nullptr
+    };
+    return PQconnectdbParams(keywords, values, 0);
 }
 
 std::optional<std::string> jsonToString(const json& value) {
@@ -331,8 +334,7 @@ void ensureStopsInDatabase(const json& searchResult, const std::string& original
     auto records = extractStopRecords(searchResult);
     if (records.empty()) return;
 
-    auto connectionString = buildConnectionString(*db_config);
-    PGconn* conn = PQconnectdb(connectionString.c_str());
+    PGconn* conn = connectToDatabase(*db_config);
     if (PQstatus(conn) != CONNECTION_OK) {
         std::cerr << "Database connection failed: " << PQerrorMessage(conn) << std::endl;
         PQfinish(conn);
@@ -559,7 +561,8 @@ int main() {
         if (!query) return crow::response(400, "Missing 'q' parameter");
 
         json searchResult = searchStopsProvider(std::string(query), city ? std::string(city) : "", includeLocation);
-        if (!(searchResult.is_object() && searchResult.contains("error"))) {
+        bool hasError = searchResult.is_object() && searchResult.contains("error");
+        if (!hasError) {
             ensureStopsInDatabase(searchResult, std::string(query));
         }
         auto response = crow::response(searchResult.dump());
