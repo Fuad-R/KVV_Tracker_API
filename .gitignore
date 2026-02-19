@@ -25,6 +25,7 @@
 *.o
 *.out
 *.a
+build/
 
 ### Windows ###
 # Windows operating system specific files

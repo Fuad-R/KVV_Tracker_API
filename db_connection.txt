@@ -1,0 +1,6 @@
+host=localhost
+port=5432
+dbname=kvv_tracker
+user=kvv_user
+password=kvv_password
+sslmode=prefer

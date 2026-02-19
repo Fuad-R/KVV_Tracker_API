@@ -9,6 +9,11 @@
 #include <chrono>
 #include <algorithm>
 #include <cctype>
+#include <fstream>
+#include <optional>
+#include <sstream>
+#include <iomanip>
+#include <libpq-fe.h>
 
 using json = nlohmann::json;
 
@@ -25,6 +30,18 @@ const int CACHE_TTL_SECONDS = 30;
 // --- Configuration ---
 const std::string Provider_DM_URL = "https://projekte.kvv-efa.de/sl3-alone/XSLT_DM_REQUEST";
 const std::string Provider_SEARCH_URL = "https://projekte.kvv-efa.de/sl3-alone/XSLT_STOPFINDER_REQUEST";
+const std::string DB_CONFIG_PATH = "db_connection.txt";
+
+struct DbConfig {
+    std::string host;
+    std::string port;
+    std::string dbname;
+    std::string user;
+    std::string password;
+    std::string sslmode;
+};
+
+std::optional<DbConfig> db_config;
 
 // --- Helper: String Utilities ---
 std::string toLower(const std::string& str) {
@@ -32,6 +49,323 @@ std::string toLower(const std::string& str) {
     std::transform(s.begin(), s.end(), s.begin(),
                    [](unsigned char c){ return std::tolower(c); });
     return s;
+}
+
+std::string trim(const std::string& input) {
+    auto start = std::find_if_not(input.begin(), input.end(),
+                                  [](unsigned char c){ return std::isspace(c); });
+    auto end = std::find_if_not(input.rbegin(), input.rend(),
+                                [](unsigned char c){ return std::isspace(c); }).base();
+    if (start >= end) return "";
+    return std::string(start, end);
+}
+
+std::optional<DbConfig> loadDbConfig(const std::string& path) {
+    std::ifstream file(path);
+    if (!file) {
+        std::cerr << "Database config not found: " << path << std::endl;
+        return std::nullopt;
+    }
+
+    DbConfig config;
+    std::string line;
+    while (std::getline(file, line)) {
+        line = trim(line);
+        if (line.empty() || line[0] == '#') continue;
+        auto pos = line.find('=');
+        if (pos == std::string::npos) continue;
+        std::string key = toLower(trim(line.substr(0, pos)));
+        std::string value = trim(line.substr(pos + 1));
+        if (key == "host") config.host = value;
+        else if (key == "port") config.port = value;
+        else if (key == "dbname") config.dbname = value;
+        else if (key == "user") config.user = value;
+        else if (key == "password") config.password = value;
+        else if (key == "sslmode") config.sslmode = value;
+    }
+
+    if (config.host.empty() || config.port.empty() || config.dbname.empty() ||
+        config.user.empty() || config.password.empty()) {
+        std::cerr << "Database config missing required fields in: " << path << std::endl;
+        return std::nullopt;
+    }
+
+    return config;
+}
+
+std::string buildConnectionString(const DbConfig& config) {
+    std::ostringstream conn;
+    conn << "host=" << config.host
+         << " port=" << config.port
+         << " dbname=" << config.dbname
+         << " user=" << config.user
+         << " password=" << config.password;
+    if (!config.sslmode.empty()) conn << " sslmode=" << config.sslmode;
+    return conn.str();
+}
+
+std::optional<std::string> jsonToString(const json& value) {
+    if (value.is_string()) return value.get<std::string>();
+    if (value.is_number_integer()) return std::to_string(value.get<long long>());
+    if (value.is_number_float()) {
+        std::ostringstream stream;
+        stream << std::setprecision(15) << value.get<double>();
+        return stream.str();
+    }
+    return std::nullopt;
+}
+
+std::optional<double> jsonToDouble(const json& value) {
+    if (value.is_number()) return value.get<double>();
+    if (value.is_string()) {
+        try {
+            return std::stod(value.get<std::string>());
+        } catch (...) {
+            return std::nullopt;
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<std::string> getJsonString(const json& obj, std::initializer_list<const char*> keys) {
+    for (const auto* key : keys) {
+        if (obj.contains(key)) {
+            auto value = jsonToString(obj.at(key));
+            if (value && !value->empty()) return value;
+        }
+    }
+    return std::nullopt;
+}
+
+std::string formatDouble(double value) {
+    std::ostringstream stream;
+    stream << std::fixed << std::setprecision(8) << value;
+    return stream.str();
+}
+
+std::optional<std::string> buildMotArray(const json& stop) {
+    std::vector<int> motValues;
+
+    auto addValue = [&](const json& value) {
+        if (value.is_number_integer()) {
+            motValues.push_back(value.get<int>());
+        } else if (value.is_string()) {
+            try {
+                motValues.push_back(std::stoi(value.get<std::string>()));
+            } catch (...) {
+                return;
+            }
+        } else if (value.is_object()) {
+            auto nested = getJsonString(value, {"motType", "type", "mode"});
+            if (nested) {
+                try {
+                    motValues.push_back(std::stoi(*nested));
+                } catch (...) {
+                    return;
+                }
+            }
+        }
+    };
+
+    if (stop.contains("modes")) {
+        const auto& modes = stop.at("modes");
+        if (modes.is_array()) {
+            for (const auto& item : modes) addValue(item);
+        } else {
+            addValue(modes);
+        }
+    } else if (stop.contains("mot")) {
+        const auto& mot = stop.at("mot");
+        if (mot.is_array()) {
+            for (const auto& item : mot) addValue(item);
+        } else {
+            addValue(mot);
+        }
+    } else if (stop.contains("motType")) {
+        addValue(stop.at("motType"));
+    }
+
+    if (motValues.empty()) return std::nullopt;
+
+    std::ostringstream stream;
+    stream << "{";
+    for (size_t i = 0; i < motValues.size(); ++i) {
+        if (i > 0) stream << ",";
+        stream << motValues[i];
+    }
+    stream << "}";
+    return stream.str();
+}
+
+bool extractCoordinates(const json& stop, double& lat, double& lon) {
+    auto extractFromObject = [&](const json& coord) -> bool {
+        if (coord.contains("x") && coord.contains("y")) {
+            auto x = jsonToDouble(coord.at("x"));
+            auto y = jsonToDouble(coord.at("y"));
+            if (x && y) {
+                lon = *x;
+                lat = *y;
+                return true;
+            }
+        }
+        if (coord.contains("lon") && coord.contains("lat")) {
+            auto x = jsonToDouble(coord.at("lon"));
+            auto y = jsonToDouble(coord.at("lat"));
+            if (x && y) {
+                lon = *x;
+                lat = *y;
+                return true;
+            }
+        }
+        if (coord.contains("longitude") && coord.contains("latitude")) {
+            auto x = jsonToDouble(coord.at("longitude"));
+            auto y = jsonToDouble(coord.at("latitude"));
+            if (x && y) {
+                lon = *x;
+                lat = *y;
+                return true;
+            }
+        }
+        return false;
+    };
+
+    if (stop.contains("coord")) {
+        const auto& coord = stop.at("coord");
+        if (coord.is_object() && extractFromObject(coord)) return true;
+        if (coord.is_array() && coord.size() >= 2) {
+            auto x = jsonToDouble(coord.at(0));
+            auto y = jsonToDouble(coord.at(1));
+            if (x && y) {
+                lon = *x;
+                lat = *y;
+                return true;
+            }
+        }
+    }
+
+    if (extractFromObject(stop)) return true;
+
+    if (stop.contains("latitude") && stop.contains("longitude")) {
+        auto y = jsonToDouble(stop.at("latitude"));
+        auto x = jsonToDouble(stop.at("longitude"));
+        if (x && y) {
+            lon = *x;
+            lat = *y;
+            return true;
+        }
+    }
+
+    return false;
+}
+
+struct StopRecord {
+    std::string stop_id;
+    std::string stop_name;
+    std::string city;
+    std::optional<std::string> mot_array;
+    double latitude;
+    double longitude;
+};
+
+std::optional<StopRecord> parseStopRecord(const json& stop) {
+    auto stopId = getJsonString(stop, {"id", "stopId", "stopID", "gid"});
+    auto stopName = getJsonString(stop, {"name", "stopName", "stop_name"});
+    if (!stopId || !stopName) return std::nullopt;
+
+    double latitude = 0.0;
+    double longitude = 0.0;
+    if (!extractCoordinates(stop, latitude, longitude)) return std::nullopt;
+
+    auto city = getJsonString(stop, {"city", "place", "locality", "town"});
+    return StopRecord{
+        *stopId,
+        *stopName,
+        city.value_or(""),
+        buildMotArray(stop),
+        latitude,
+        longitude
+    };
+}
+
+std::vector<StopRecord> extractStopRecords(const json& searchResult) {
+    const json* stopArray = nullptr;
+
+    if (searchResult.is_array()) {
+        stopArray = &searchResult;
+    } else if (searchResult.is_object()) {
+        if (searchResult.contains("stopFinder")) {
+            const auto& finder = searchResult.at("stopFinder");
+            if (finder.contains("points") && finder.at("points").is_array()) {
+                stopArray = &finder.at("points");
+            } else if (finder.contains("locations") && finder.at("locations").is_array()) {
+                stopArray = &finder.at("locations");
+            } else if (finder.contains("points") && finder.at("points").contains("point") &&
+                       finder.at("points").at("point").is_array()) {
+                stopArray = &finder.at("points").at("point");
+            }
+        }
+
+        if (!stopArray && searchResult.contains("locations") && searchResult.at("locations").is_array()) {
+            stopArray = &searchResult.at("locations");
+        }
+        if (!stopArray && searchResult.contains("points") && searchResult.at("points").is_array()) {
+            stopArray = &searchResult.at("points");
+        }
+    }
+
+    std::vector<StopRecord> records;
+    if (!stopArray) return records;
+
+    for (const auto& stop : *stopArray) {
+        if (!stop.is_object()) continue;
+        auto record = parseStopRecord(stop);
+        if (record) records.push_back(*record);
+    }
+
+    return records;
+}
+
+void ensureStopsInDatabase(const json& searchResult, const std::string& originalSearch) {
+    if (!db_config) return;
+
+    auto records = extractStopRecords(searchResult);
+    if (records.empty()) return;
+
+    auto connectionString = buildConnectionString(*db_config);
+    PGconn* conn = PQconnectdb(connectionString.c_str());
+    if (PQstatus(conn) != CONNECTION_OK) {
+        std::cerr << "Database connection failed: " << PQerrorMessage(conn) << std::endl;
+        PQfinish(conn);
+        return;
+    }
+
+    const char* insertSql =
+        "INSERT INTO stops (stop_id, stop_name, city, mot, location, original_search) "
+        "VALUES ($1, $2, $3, $4, ST_SetSRID(ST_MakePoint($5, $6), 4326)::geography, $7) "
+        "ON CONFLICT (stop_id) DO NOTHING;";
+
+    for (const auto& record : records) {
+        std::string longitudeText = formatDouble(record.longitude);
+        std::string latitudeText = formatDouble(record.latitude);
+
+        const char* values[7];
+        values[0] = record.stop_id.c_str();
+        values[1] = record.stop_name.c_str();
+        values[2] = record.city.empty() ? nullptr : record.city.c_str();
+        values[3] = record.mot_array ? record.mot_array->c_str() : nullptr;
+        values[4] = longitudeText.c_str();
+        values[5] = latitudeText.c_str();
+        values[6] = originalSearch.empty() ? nullptr : originalSearch.c_str();
+
+        PGresult* res = PQexecParams(conn, insertSql, 7, nullptr, values, nullptr, nullptr, 0);
+        if (PQresultStatus(res) != PGRES_COMMAND_OK) {
+            std::cerr << "Failed to insert stop " << record.stop_id << ": "
+                      << PQerrorMessage(conn) << std::endl;
+        }
+        PQclear(res);
+    }
+
+    PQfinish(conn);
 }
 
 // --- Helper: Search Stops ---
@@ -211,6 +545,7 @@ json normalizeResponse(const json& ProviderData, bool detailed = false, bool inc
 
 int main() {
     crow::SimpleApp app;
+    db_config = loadDbConfig(DB_CONFIG_PATH);
 
     // Search Endpoint
     CROW_ROUTE(app, "/api/stops/search")
@@ -223,7 +558,11 @@ int main() {
 
         if (!query) return crow::response(400, "Missing 'q' parameter");
 
-        auto response = crow::response(searchStopsProvider(std::string(query), city ? std::string(city) : "", includeLocation).dump());
+        json searchResult = searchStopsProvider(std::string(query), city ? std::string(city) : "", includeLocation);
+        if (!(searchResult.is_object() && searchResult.contains("error"))) {
+            ensureStopsInDatabase(searchResult, std::string(query));
+        }
+        auto response = crow::response(searchResult.dump());
         response.set_header("Content-Type", "application/json");
         return response;
 
