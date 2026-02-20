@@ -552,6 +552,9 @@ int main() {
     if (!db_config) {
         db_config = loadDbConfig(DB_CONFIG_CONTAINER_PATH);
     }
+    if (!db_config) {
+        std::cerr << "Database config unavailable. Stop persistence disabled." << std::endl;
+    }
 
     // Search Endpoint
     CROW_ROUTE(app, "/api/stops/search")
