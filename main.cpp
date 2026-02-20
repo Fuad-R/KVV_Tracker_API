@@ -214,8 +214,8 @@ bool extractCoordinates(const json& stop, double& lat, double& lon) {
             auto x = jsonToDouble(coord.at("x"));
             auto y = jsonToDouble(coord.at("y"));
             if (x && y) {
-                lon = *x;
-                lat = *y;
+                lat = *x;
+                lon = *y;
                 return true;
             }
         }
@@ -247,8 +247,8 @@ bool extractCoordinates(const json& stop, double& lat, double& lon) {
             auto x = jsonToDouble(coord.at(0));
             auto y = jsonToDouble(coord.at(1));
             if (x && y) {
-                lon = *x;
-                lat = *y;
+                lat = *x;
+                lon = *y;
                 return true;
             }
         }
