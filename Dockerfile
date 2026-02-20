@@ -4,13 +4,15 @@ FROM ubuntu:22.04 AS builder
 # Prevent interactive prompts during package installation
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install build dependencies
+# Install build dependencies + PostgreSQL dev libraries
 RUN apt-get update && apt-get install -y \
     cmake \
     build-essential \
     git \
     libssl-dev \
     ca-certificates \
+    libpq-dev \
+    postgresql-client \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -18,36 +20,37 @@ WORKDIR /app
 # Copy the source code
 COPY . .
 
-# FIX: Force CPR to use static libraries by modifying CMakeLists.txt
-# We inject the option right before FetchContent or at the top of the file
+# Force CPR to use static libraries
 RUN sed -i '1s/^/set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)\n/' CMakeLists.txt
 
-# Create build directory and compile
+# Build the project
 RUN mkdir build && cd build && \
     cmake .. && \
     make -j$(nproc)
 
-# Stage 2: Create the runtime image
+
+# Stage 2: Runtime image
 FROM ubuntu:22.04
 
-# Install runtime dependencies
-# We still need libssl3 because even static cpr/curl links against system OpenSSL
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install runtime dependencies (including PostgreSQL runtime lib)
 RUN apt-get update && apt-get install -y \
     libssl3 \
     ca-certificates \
+    libpq5 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Copy the statically linked executable
+# Copy compiled binary
 COPY --from=builder /app/build/kvv_aggregator .
 
-# Copy the vehicle types data file
-# Added a check to ensure it doesn't fail if the file is missing (optional safety)
+# Copy optional data file
 COPY --from=builder /app/vehicle_types.txt .
 
-# Expose the internal port defined in main.cpp
+# Expose port
 EXPOSE 8080
 
-# Run the application
+# Run
 CMD ["./kvv_aggregator"]
