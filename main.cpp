@@ -185,6 +185,13 @@ std::optional<std::string> buildMotArray(const json& stop) {
         } else {
             addValue(mot);
         }
+    } else if (stop.contains("productClasses")) {
+        const auto& classes = stop.at("productClasses");
+        if (classes.is_array()) {
+            for (const auto& item : classes) addValue(item);
+        } else {
+            addValue(classes);
+        }
     } else if (stop.contains("motType")) {
         addValue(stop.at("motType"));
     }
@@ -281,6 +288,9 @@ std::optional<StopRecord> parseStopRecord(const json& stop) {
     if (!extractCoordinates(stop, latitude, longitude)) return std::nullopt;
 
     auto city = getJsonString(stop, {"city", "place", "locality", "town"});
+    if (!city && stop.contains("parent") && stop.at("parent").is_object()) {
+        city = getJsonString(stop.at("parent"), {"name", "city", "place", "locality", "town"});
+    }
     return StopRecord{
         *stopId,
         *stopName,
@@ -345,7 +355,13 @@ void ensureStopsInDatabase(const json& searchResult, const std::string& original
     const char* insertSql =
         "INSERT INTO stops (stop_id, stop_name, city, mot, location, original_search) "
         "VALUES ($1, $2, $3, $4, ST_SetSRID(ST_MakePoint($5, $6), 4326)::geography, $7) "
-        "ON CONFLICT (stop_id) DO NOTHING;";
+        "ON CONFLICT (stop_id) DO UPDATE SET "
+        "stop_name = EXCLUDED.stop_name, "
+        "city = COALESCE(EXCLUDED.city, stops.city), "
+        "mot = COALESCE(EXCLUDED.mot, stops.mot), "
+        "location = EXCLUDED.location, "
+        "original_search = COALESCE(EXCLUDED.original_search, stops.original_search), "
+        "last_updated = NOW();";
 
     for (const auto& record : records) {
         std::string longitudeText = formatDouble(record.longitude);
