@@ -211,7 +211,7 @@ std::optional<std::string> buildMotArray(const json& stop) {
 bool extractCoordinates(const json& stop, double& lat, double& lon) {
     auto extractFromObject = [&](const json& coord) -> bool {
         if (coord.contains("x") && coord.contains("y")) {
-            // Provider returns coordinates where x=latitude and y=longitude.
+            // KVV stopfinder returns coordinates where x=latitude and y=longitude.
             auto latValue = jsonToDouble(coord.at("x"));
             auto lonValue = jsonToDouble(coord.at("y"));
             if (latValue && lonValue) {
