@@ -1,6 +1,6 @@
-host=localhost
+host=hostip
 port=5432
-dbname=kvv_tracker
-user=kvv_user
-password=kvv_password
+dbname=postgres
+user=username
+password=password
 sslmode=prefer
