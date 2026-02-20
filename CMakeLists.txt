@@ -65,7 +65,12 @@ set(BUILD_CPR_TESTS OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(cpr)
 
 # ------------------------------------------------------------------------------
-# 5. Build Target
+# 5. PostgreSQL
+# ------------------------------------------------------------------------------
+find_package(PostgreSQL REQUIRED)
+
+# ------------------------------------------------------------------------------
+# 6. Build Target
 # ------------------------------------------------------------------------------
 add_executable(kvv_aggregator main.cpp)
 
@@ -73,4 +78,5 @@ target_link_libraries(kvv_aggregator PRIVATE
         Crow::Crow
         nlohmann_json::nlohmann_json
         cpr::cpr
+        PostgreSQL::PostgreSQL
 )

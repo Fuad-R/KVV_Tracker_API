@@ -10,6 +10,7 @@ The KVV Tracker API provides real-time transit departure information for the Kar
 
 ### 1. **Stop Search**
 Search for transit stops by name across the KVV network. Results include stop identification and geographic coordinates.
+When configured, each stop search also stores any new stops in the PostgreSQL database.
 
 ### 2. **Real-time Departures**
 Retrieve live departure information for any stop, including line numbers, directions, platforms, and countdown timers.
@@ -41,6 +42,26 @@ Search for transit stops by name.
 **Response:** JSON array of matching stops with stop identifiers and coordinates
 
 ---
+
+## Database Configuration
+Stop search persistence reads PostgreSQL connection values from `db_connection.txt` in the repository root.
+Copy `db_connection.txt.example` to `db_connection.txt` and update the values (the `sslmode` entry is optional).
+In Docker, mount the file to `/config/db_connection.txt` to use the container path.
+If the file is missing or incomplete, stop searches still respond, but no stops are persisted.
+
+The database must include the following schema:
+```
+CREATE TABLE stops (
+   stop_id TEXT PRIMARY KEY,
+   stop_name TEXT NOT NULL,
+   city TEXT,
+   mot SMALLINT[],
+   location GEOGRAPHY(Point, 4326) NOT NULL,
+   original_search TEXT,
+   created TIMESTAMPTZ DEFAULT NOW(),
+   last_updated TIMESTAMPTZ DEFAULT NOW()
+);
+```
 
 ### Get Departures
 **`GET /api/stops/{stopId}`**
