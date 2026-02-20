@@ -31,6 +31,7 @@ const int CACHE_TTL_SECONDS = 30;
 const std::string Provider_DM_URL = "https://projekte.kvv-efa.de/sl3-alone/XSLT_DM_REQUEST";
 const std::string Provider_SEARCH_URL = "https://projekte.kvv-efa.de/sl3-alone/XSLT_STOPFINDER_REQUEST";
 const std::string DB_CONFIG_PATH = "db_connection.txt";
+const std::string DB_CONFIG_CONTAINER_PATH = "/config/db_connection.txt";
 
 struct DbConfig {
     std::string host;
@@ -548,6 +549,9 @@ json normalizeResponse(const json& ProviderData, bool detailed = false, bool inc
 int main() {
     crow::SimpleApp app;
     db_config = loadDbConfig(DB_CONFIG_PATH);
+    if (!db_config) {
+        db_config = loadDbConfig(DB_CONFIG_CONTAINER_PATH);
+    }
 
     // Search Endpoint
     CROW_ROUTE(app, "/api/stops/search")

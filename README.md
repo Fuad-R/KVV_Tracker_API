@@ -46,6 +46,7 @@ Search for transit stops by name.
 ## Database Configuration
 Stop search persistence reads PostgreSQL connection values from `db_connection.txt` in the repository root.
 Copy `db_connection.txt.example` to `db_connection.txt` and update the values (the `sslmode` entry is optional).
+In Docker, mount the file to `/config/db_connection.txt` to use the container path.
 If the file is missing or incomplete, stop searches still respond, but no stops are persisted.
 
 The database must include the following schema:
