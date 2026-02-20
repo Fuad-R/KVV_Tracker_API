@@ -211,11 +211,12 @@ std::optional<std::string> buildMotArray(const json& stop) {
 bool extractCoordinates(const json& stop, double& lat, double& lon) {
     auto extractFromObject = [&](const json& coord) -> bool {
         if (coord.contains("x") && coord.contains("y")) {
-            auto x = jsonToDouble(coord.at("x"));
-            auto y = jsonToDouble(coord.at("y"));
-            if (x && y) {
-                lon = *x;
-                lat = *y;
+            // Stopfinder returns coordinates where x=latitude and y=longitude.
+            auto latValue = jsonToDouble(coord.at("x"));
+            auto lonValue = jsonToDouble(coord.at("y"));
+            if (latValue && lonValue) {
+                lat = *latValue;
+                lon = *lonValue;
                 return true;
             }
         }
@@ -244,11 +245,12 @@ bool extractCoordinates(const json& stop, double& lat, double& lon) {
         const auto& coord = stop.at("coord");
         if (coord.is_object() && extractFromObject(coord)) return true;
         if (coord.is_array() && coord.size() >= 2) {
-            auto x = jsonToDouble(coord.at(0));
-            auto y = jsonToDouble(coord.at(1));
-            if (x && y) {
-                lon = *x;
-                lat = *y;
+            // Stopfinder arrays use [latitude, longitude] ordering.
+            auto latValue = jsonToDouble(coord.at(0));
+            auto lonValue = jsonToDouble(coord.at(1));
+            if (latValue && lonValue) {
+                lat = *latValue;
+                lon = *lonValue;
                 return true;
             }
         }
