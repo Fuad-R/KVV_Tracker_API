@@ -1,15 +1,12 @@
-**Transit tracker API**
-
-
-# KVV Tracker API - Usage & Functionality Documentation
+# Transit Tracker API - Usage & Functionality Documentation
 
 ## Overview
-The KVV Tracker API provides real-time transit departure information for the Karlsruhe public transport system. It integrates with the KVV (Karlsruher Verkehrsverbund) data provider to deliver normalized, cached departure data with optional filtering and accessibility information.
+This Transit Tracker API provides real-time transit departure information for the Karlsruhe public transport system. It integrates with any EFA-compatible upstream data provider to deliver normalized, cached departure data with optional filtering and accessibility information.
 
 ## Core Functionality
 
 ### 1. **Stop Search**
-Search for transit stops by name across the KVV network. Results include stop identification and geographic coordinates.
+Search for transit stops by name across the network. Results include stop identification and geographic coordinates.
 When configured, each stop search also stores any new stops in the PostgreSQL database.
 
 ### 2. **Real-time Departures**
