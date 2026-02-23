@@ -36,7 +36,6 @@ const std::string Provider_DM_URL = "https://projekte.kvv-efa.de/sl3-alone/XSLT_
 const std::string Provider_SEARCH_URL = "https://projekte.kvv-efa.de/sl3-alone/XSLT_STOPFINDER_REQUEST";
 const std::string DB_CONFIG_PATH = "db_connection.txt";
 const std::string DB_CONFIG_CONTAINER_PATH = "/config/db_connection.txt";
-const std::string UMAMI_HOST = "https://umami.fuadserver.uk";
 const std::string UMAMI_SCREEN = "0x0";
 const int UMAMI_TIMEOUT_MS = 500;
 const size_t UMAMI_MAX_TASKS = 32;
@@ -47,9 +46,6 @@ struct UmamiConfig {
     std::string domain;
     std::string websiteId;
 };
-
-const UmamiConfig UMAMI_PROD{UMAMI_HOST, "transitapi.fuadserver.uk", "77c616ab-68a7-4621-9433-21dbe1321b95"};
-const UmamiConfig UMAMI_DEV{UMAMI_HOST, "transitapi-dev.fuadserver.uk", "98e751b8-0d4e-48bb-a4c0-7b076a18e504"};
 
 struct DbConfig {
     std::string host;
@@ -89,8 +85,37 @@ bool isDevMode() {
     return isDev;
 }
 
-UmamiConfig getUmamiConfig() {
-    return isDevMode() ? UMAMI_DEV : UMAMI_PROD;
+std::optional<std::string> getEnvValue(const std::string& key) {
+    const char* value = std::getenv(key.c_str());
+    if (!value) return std::nullopt;
+    std::string trimmed = trim(value);
+    if (trimmed.empty()) return std::nullopt;
+    return trimmed;
+}
+
+std::optional<UmamiConfig> loadUmamiConfig() {
+    bool devMode = isDevMode();
+    std::string prefix = devMode ? "UMAMI_DEV_" : "UMAMI_";
+    auto host = getEnvValue(prefix + "HOST");
+    auto domain = getEnvValue(prefix + "DOMAIN");
+    auto websiteId = getEnvValue(prefix + "WEBSITE_ID");
+
+    if (devMode) {
+        if (!host) host = getEnvValue("UMAMI_HOST");
+        if (!domain) domain = getEnvValue("UMAMI_DOMAIN");
+        if (!websiteId) websiteId = getEnvValue("UMAMI_WEBSITE_ID");
+    }
+
+    if (!host || !domain || !websiteId) {
+        return std::nullopt;
+    }
+
+    return UmamiConfig{*host, *domain, *websiteId};
+}
+
+const std::optional<UmamiConfig>& getUmamiConfig() {
+    static const std::optional<UmamiConfig> config = loadUmamiConfig();
+    return config;
 }
 
 std::string getPreferredLanguage(const crow::request& req) {
@@ -119,7 +144,17 @@ std::string getClientIp(const crow::request& req) {
 
 void trackUmamiPageview(const crow::request& req) {
     static size_t umami_cleanup_counter = 0;
-    UmamiConfig config = getUmamiConfig();
+    const std::optional<UmamiConfig>& config = getUmamiConfig();
+    if (!config) {
+        static bool warned = false;
+        if (isDevMode() && !warned) {
+            std::cerr << "Umami tracking disabled: missing UMAMI_HOST/UMAMI_DOMAIN/UMAMI_WEBSITE_ID "
+                         "(or UMAMI_DEV_* overrides)"
+                      << std::endl;
+            warned = true;
+        }
+        return;
+    }
     std::string url = req.raw_url.empty() ? req.url : req.raw_url;
     std::string referrer = req.get_header_value("Referer");
     std::string userAgent = req.get_header_value("User-Agent");
@@ -130,8 +165,8 @@ void trackUmamiPageview(const crow::request& req) {
     json payload = {
         {"type", "pageview"},
         {"payload", {
-            {"website", config.websiteId},
-            {"hostname", config.domain},
+            {"website", config->websiteId},
+            {"hostname", config->domain},
             {"url", url},
             {"referrer", referrer},
             {"screen", UMAMI_SCREEN},
@@ -140,7 +175,7 @@ void trackUmamiPageview(const crow::request& req) {
         }}
     };
 
-    std::string endpoint = config.host + "/api/collect";
+    std::string endpoint = config->host + "/api/collect";
     std::string body = payload.dump();
     cpr::Header headers{{"Content-Type", "application/json"}};
     if (!userAgent.empty()) headers["User-Agent"] = userAgent;

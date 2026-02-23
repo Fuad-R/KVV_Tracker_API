@@ -160,7 +160,15 @@ All endpoints return JSON. Standard departure response:
 
 ## Analytics (Umami)
 
-The API sends pageview-style analytics to Umami at `https://umami.fuadserver.uk`.
+The API sends pageview-style analytics to Umami when configured via environment variables.
 
-- **Production (default):** `transitapi.fuadserver.uk` with website ID `77c616ab-68a7-4621-9433-21dbe1321b95`
-- **Development:** set Docker env var `dev=true` to use `transitapi-dev.fuadserver.uk` with website ID `98e751b8-0d4e-48bb-a4c0-7b076a18e504`
+- **Production (default):**
+  - `UMAMI_HOST` (e.g. `https://umami.fuadserver.uk`)
+  - `UMAMI_DOMAIN` (e.g. `transitapi.fuadserver.uk`)
+  - `UMAMI_WEBSITE_ID`
+- **Development:** set Docker env var `dev=true` and optionally provide:
+  - `UMAMI_DEV_HOST`
+  - `UMAMI_DEV_DOMAIN`
+  - `UMAMI_DEV_WEBSITE_ID`
+
+If the dev-specific values are not set, the production `UMAMI_*` values are used. Tracking is disabled if the required values are missing.
