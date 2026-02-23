@@ -50,6 +50,7 @@ The database must include the following schema:
 ```
 CREATE TABLE stops (
    stop_id TEXT PRIMARY KEY,
+   local_id TEXT,
    stop_name TEXT NOT NULL,
    city TEXT,
    mot SMALLINT[],
@@ -152,3 +153,20 @@ All endpoints return JSON. Standard departure response:
 - Repeated queries within the TTL window return cached results
 - Platform filtering is applied post-normalization (locally)
 - Upstream provider supports up to 40 departures per request
+
+---
+
+## Analytics (Umami)
+
+The API sends pageview-style analytics to Umami when configured via environment variables.
+
+- **Production (default):**
+  - `UMAMI_HOST` (e.g. `https://umami.fuadserver.uk`)
+  - `UMAMI_DOMAIN` (e.g. `transitapi.fuadserver.uk`)
+  - `UMAMI_WEBSITE_ID`
+- **Development:** set Docker env var `dev=true` and optionally provide:
+  - `UMAMI_DEV_HOST`
+  - `UMAMI_DEV_DOMAIN`
+  - `UMAMI_DEV_WEBSITE_ID`
+
+If the dev-specific values are not set, the production `UMAMI_*` values are used. Tracking is disabled if the required values are missing.
