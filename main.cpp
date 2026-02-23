@@ -422,6 +422,7 @@ bool extractCoordinates(const json& stop, double& lat, double& lon) {
 
 struct StopRecord {
     std::string stop_id;
+    std::optional<std::string> local_id;
     std::string stop_name;
     std::string city;
     std::optional<std::string> mot_array;
@@ -434,6 +435,11 @@ std::optional<StopRecord> parseStopRecord(const json& stop) {
     auto stopName = getJsonString(stop, {"name", "stopName", "stop_name"});
     if (!stopId || !stopName) return std::nullopt;
 
+    std::optional<std::string> localId;
+    if (stop.contains("properties") && stop.at("properties").is_object()) {
+        localId = getJsonString(stop.at("properties"), {"stopId", "stopID", "stop_id", "local_id"});
+    }
+
     double latitude = 0.0;
     double longitude = 0.0;
     if (!extractCoordinates(stop, latitude, longitude)) return std::nullopt;
@@ -444,6 +450,7 @@ std::optional<StopRecord> parseStopRecord(const json& stop) {
     }
     return StopRecord{
         *stopId,
+        localId,
         *stopName,
         city.value_or(""),
         buildMotArray(stop),
@@ -504,9 +511,10 @@ void ensureStopsInDatabase(const json& searchResult, const std::string& original
     }
 
     const char* insertSql =
-        "INSERT INTO stops (stop_id, stop_name, city, mot, location, original_search) "
-        "VALUES ($1, $2, $3, $4, ST_SetSRID(ST_MakePoint($5, $6), 4326)::geography, $7) "
+        "INSERT INTO stops (stop_id, local_id, stop_name, city, mot, location, original_search) "
+        "VALUES ($1, $2, $3, $4, $5, ST_SetSRID(ST_MakePoint($6, $7), 4326)::geography, $8) "
         "ON CONFLICT (stop_id) DO UPDATE SET "
+        "local_id = COALESCE(EXCLUDED.local_id, stops.local_id), "
         "stop_name = EXCLUDED.stop_name, "
         "city = COALESCE(EXCLUDED.city, stops.city), "
         "mot = COALESCE(EXCLUDED.mot, stops.mot), "
@@ -518,16 +526,17 @@ void ensureStopsInDatabase(const json& searchResult, const std::string& original
         std::string longitudeText = formatDouble(record.longitude);
         std::string latitudeText = formatDouble(record.latitude);
 
-        const char* values[7];
+        const char* values[8];
         values[0] = record.stop_id.c_str();
-        values[1] = record.stop_name.c_str();
-        values[2] = record.city.empty() ? nullptr : record.city.c_str();
-        values[3] = record.mot_array ? record.mot_array->c_str() : nullptr;
-        values[4] = longitudeText.c_str();
-        values[5] = latitudeText.c_str();
-        values[6] = originalSearch.empty() ? nullptr : originalSearch.c_str();
+        values[1] = record.local_id ? record.local_id->c_str() : nullptr;
+        values[2] = record.stop_name.c_str();
+        values[3] = record.city.empty() ? nullptr : record.city.c_str();
+        values[4] = record.mot_array ? record.mot_array->c_str() : nullptr;
+        values[5] = longitudeText.c_str();
+        values[6] = latitudeText.c_str();
+        values[7] = originalSearch.empty() ? nullptr : originalSearch.c_str();
 
-        PGresult* res = PQexecParams(conn, insertSql, 7, nullptr, values, nullptr, nullptr, 0);
+        PGresult* res = PQexecParams(conn, insertSql, 8, nullptr, values, nullptr, nullptr, 0);
         if (PQresultStatus(res) != PGRES_COMMAND_OK) {
             std::cerr << "Failed to insert stop " << record.stop_id << ": "
                       << PQerrorMessage(conn) << std::endl;
