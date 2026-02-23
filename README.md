@@ -155,3 +155,12 @@ All endpoints return JSON. Standard departure response:
 - Repeated queries within the TTL window return cached results
 - Platform filtering is applied post-normalization (locally)
 - Upstream provider supports up to 40 departures per request
+
+---
+
+## Analytics (Umami)
+
+The API sends pageview-style analytics to Umami at `https://umami.fuadserver.uk`.
+
+- **Production (default):** `transitapi.fuadserver.uk` with website ID `77c616ab-68a7-4621-9433-21dbe1321b95`
+- **Development:** set Docker env var `dev=true` to use `transitapi-dev.fuadserver.uk` with website ID `98e751b8-0d4e-48bb-a4c0-7b076a18e504`

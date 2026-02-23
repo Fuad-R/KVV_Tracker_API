@@ -9,10 +9,12 @@
 #include <chrono>
 #include <algorithm>
 #include <cctype>
+#include <cstdlib>
 #include <fstream>
 #include <optional>
 #include <sstream>
 #include <iomanip>
+#include <thread>
 #include <libpq-fe.h>
 
 using json = nlohmann::json;
@@ -32,6 +34,16 @@ const std::string Provider_DM_URL = "https://projekte.kvv-efa.de/sl3-alone/XSLT_
 const std::string Provider_SEARCH_URL = "https://projekte.kvv-efa.de/sl3-alone/XSLT_STOPFINDER_REQUEST";
 const std::string DB_CONFIG_PATH = "db_connection.txt";
 const std::string DB_CONFIG_CONTAINER_PATH = "/config/db_connection.txt";
+const std::string UMAMI_HOST = "https://umami.fuadserver.uk";
+
+struct UmamiConfig {
+    std::string host;
+    std::string domain;
+    std::string websiteId;
+};
+
+const UmamiConfig UMAMI_PROD{UMAMI_HOST, "transitapi.fuadserver.uk", "77c616ab-68a7-4621-9433-21dbe1321b95"};
+const UmamiConfig UMAMI_DEV{UMAMI_HOST, "transitapi-dev.fuadserver.uk", "98e751b8-0d4e-48bb-a4c0-7b076a18e504"};
 
 struct DbConfig {
     std::string host;
@@ -59,6 +71,63 @@ std::string trim(const std::string& input) {
                                 [](unsigned char c){ return std::isspace(c); }).base();
     if (start >= end) return "";
     return std::string(start, end);
+}
+
+bool isDevMode() {
+    static const bool isDev = []() {
+        const char* devEnv = std::getenv("dev");
+        if (!devEnv) return false;
+        std::string value = toLower(trim(std::string(devEnv)));
+        return value == "true" || value == "1";
+    }();
+    return isDev;
+}
+
+UmamiConfig getUmamiConfig() {
+    return isDevMode() ? UMAMI_DEV : UMAMI_PROD;
+}
+
+std::string getPreferredLanguage(const crow::request& req) {
+    std::string language = req.get_header_value("Accept-Language");
+    if (language.empty()) return "en";
+    auto commaPos = language.find(',');
+    if (commaPos != std::string::npos) language = language.substr(0, commaPos);
+    auto semicolonPos = language.find(';');
+    if (semicolonPos != std::string::npos) language = language.substr(0, semicolonPos);
+    language = trim(language);
+    return language.empty() ? "en" : language;
+}
+
+void trackUmamiPageview(const crow::request& req) {
+    UmamiConfig config = getUmamiConfig();
+    std::string url = req.raw_url.empty() ? req.url : req.raw_url;
+    std::string referrer = req.get_header_value("Referer");
+    std::string userAgent = req.get_header_value("User-Agent");
+    std::string language = getPreferredLanguage(req);
+    std::string remoteIp = req.remote_ip_address;
+
+    json payload = {
+        {"type", "pageview"},
+        {"payload", {
+            {"website", config.websiteId},
+            {"hostname", config.domain},
+            {"url", url},
+            {"referrer", referrer},
+            {"screen", "0x0"},
+            {"language", language},
+            {"title", "KVV Tracker API"}
+        }}
+    };
+
+    std::string endpoint = config.host + "/api/collect";
+    std::string body = payload.dump();
+
+    std::thread([endpoint, body, userAgent, remoteIp]() {
+        cpr::Header headers{{"Content-Type", "application/json"}};
+        if (!userAgent.empty()) headers["User-Agent"] = userAgent;
+        if (!remoteIp.empty()) headers["X-Forwarded-For"] = remoteIp;
+        cpr::Post(cpr::Url{endpoint}, headers, cpr::Body{body}, cpr::Timeout{2000});
+    }).detach();
 }
 
 std::optional<DbConfig> loadDbConfig(const std::string& path) {
@@ -577,6 +646,7 @@ int main() {
     // Search Endpoint
     CROW_ROUTE(app, "/api/stops/search")
     ([](const crow::request& req){
+        trackUmamiPageview(req);
         auto query = req.url_params.get("q");
         auto city = req.url_params.get("city");
         auto locationParam = req.url_params.get("location");
@@ -599,6 +669,7 @@ int main() {
     // Departures Endpoint
     CROW_ROUTE(app, "/api/stops/<string>")
     ([](const crow::request& req, std::string stopId){
+        trackUmamiPageview(req);
         const char* detailedParam = req.url_params.get("detailed");
         const char* delayParam = req.url_params.get("delay");
 
