@@ -9,6 +9,8 @@
 #include <chrono>
 #include <algorithm>
 #include <cctype>
+#include <cstdlib>
+#include <future>
 #include <fstream>
 #include <optional>
 #include <sstream>
@@ -26,12 +28,24 @@ struct CacheEntry {
 std::mutex cache_mutex;
 std::map<std::string, CacheEntry> stop_cache;
 const int CACHE_TTL_SECONDS = 30;
+std::mutex umami_mutex;
+std::vector<std::future<void>> umami_tasks;
 
 // --- Configuration ---
 const std::string Provider_DM_URL = "https://projekte.kvv-efa.de/sl3-alone/XSLT_DM_REQUEST";
 const std::string Provider_SEARCH_URL = "https://projekte.kvv-efa.de/sl3-alone/XSLT_STOPFINDER_REQUEST";
 const std::string DB_CONFIG_PATH = "db_connection.txt";
 const std::string DB_CONFIG_CONTAINER_PATH = "/config/db_connection.txt";
+const std::string UMAMI_SCREEN = "0x0";
+const int UMAMI_TIMEOUT_MS = 500;
+const size_t UMAMI_MAX_TASKS = 32;
+const size_t UMAMI_CLEANUP_INTERVAL = 32;
+
+struct UmamiConfig {
+    std::string host;
+    std::string domain;
+    std::string websiteId;
+};
 
 struct DbConfig {
     std::string host;
@@ -59,6 +73,141 @@ std::string trim(const std::string& input) {
                                 [](unsigned char c){ return std::isspace(c); }).base();
     if (start >= end) return "";
     return std::string(start, end);
+}
+
+bool isDevMode() {
+    static const bool isDev = []() {
+        const char* devEnv = std::getenv("dev");
+        if (!devEnv) return false;
+        std::string value = toLower(trim(std::string(devEnv)));
+        return value == "true" || value == "1";
+    }();
+    return isDev;
+}
+
+std::optional<std::string> getEnvValue(const std::string& key) {
+    const char* value = std::getenv(key.c_str());
+    if (!value) return std::nullopt;
+    std::string trimmed = trim(value);
+    if (trimmed.empty()) return std::nullopt;
+    return trimmed;
+}
+
+std::optional<UmamiConfig> loadUmamiConfig() {
+    bool devMode = isDevMode();
+    std::string prefix = devMode ? "UMAMI_DEV_" : "UMAMI_";
+    auto host = getEnvValue(prefix + "HOST");
+    auto domain = getEnvValue(prefix + "DOMAIN");
+    auto websiteId = getEnvValue(prefix + "WEBSITE_ID");
+
+    if (devMode) {
+        if (!host) host = getEnvValue("UMAMI_HOST");
+        if (!domain) domain = getEnvValue("UMAMI_DOMAIN");
+        if (!websiteId) websiteId = getEnvValue("UMAMI_WEBSITE_ID");
+    }
+
+    if (!host || !domain || !websiteId) {
+        return std::nullopt;
+    }
+
+    return UmamiConfig{*host, *domain, *websiteId};
+}
+
+const std::optional<UmamiConfig>& getUmamiConfig() {
+    static const std::optional<UmamiConfig> config = loadUmamiConfig();
+    return config;
+}
+
+std::string getPreferredLanguage(const crow::request& req) {
+    std::string language = req.get_header_value("Accept-Language");
+    if (language.empty()) return "en";
+    auto commaPos = language.find(',');
+    if (commaPos != std::string::npos) language = language.substr(0, commaPos);
+    auto semicolonPos = language.find(';');
+    if (semicolonPos != std::string::npos) language = language.substr(0, semicolonPos);
+    language = trim(language);
+    return language.empty() ? "en" : language;
+}
+
+std::string getClientIp(const crow::request& req) {
+    std::string forwarded = req.get_header_value("X-Forwarded-For");
+    if (!forwarded.empty()) {
+        auto commaPos = forwarded.find(',');
+        if (commaPos != std::string::npos) forwarded = forwarded.substr(0, commaPos);
+        forwarded = trim(forwarded);
+        if (!forwarded.empty()) return forwarded;
+    }
+    std::string realIp = trim(req.get_header_value("X-Real-IP"));
+    if (!realIp.empty()) return realIp;
+    return req.remote_ip_address;
+}
+
+void trackUmamiPageview(const crow::request& req) {
+    static size_t umami_cleanup_counter = 0;
+    const std::optional<UmamiConfig>& config = getUmamiConfig();
+    if (!config) {
+        static bool warned = false;
+        if (isDevMode() && !warned) {
+            std::cerr << "Umami tracking disabled: missing UMAMI_HOST/UMAMI_DOMAIN/UMAMI_WEBSITE_ID "
+                         "(or UMAMI_DEV_* overrides)"
+                      << std::endl;
+            warned = true;
+        }
+        return;
+    }
+    std::string url = req.raw_url.empty() ? req.url : req.raw_url;
+    std::string referrer = req.get_header_value("Referer");
+    std::string userAgent = req.get_header_value("User-Agent");
+    std::string language = getPreferredLanguage(req);
+    std::string clientIp = getClientIp(req);
+    std::string title = "Transit API " + url;
+
+    json payload = {
+        {"type", "pageview"},
+        {"payload", {
+            {"website", config->websiteId},
+            {"hostname", config->domain},
+            {"url", url},
+            {"referrer", referrer},
+            {"screen", UMAMI_SCREEN},
+            {"language", language},
+            {"title", title}
+        }}
+    };
+
+    std::string endpoint = config->host + "/api/collect";
+    std::string body = payload.dump();
+    cpr::Header headers{{"Content-Type", "application/json"}};
+    if (!userAgent.empty()) headers["User-Agent"] = userAgent;
+    if (!clientIp.empty()) headers["X-Forwarded-For"] = clientIp;
+
+    auto sendRequest = [endpoint, body, headers]() {
+        auto response = cpr::Post(cpr::Url{endpoint}, headers, cpr::Body{body}, cpr::Timeout{UMAMI_TIMEOUT_MS});
+        if (isDevMode() && (response.error || response.status_code >= 400)) {
+            std::cerr << "Umami tracking failed: "
+                      << (response.error ? response.error.message : std::to_string(response.status_code))
+                      << std::endl;
+        }
+    };
+
+    {
+        std::lock_guard<std::mutex> lock(umami_mutex);
+        umami_cleanup_counter = (umami_cleanup_counter + 1) % UMAMI_CLEANUP_INTERVAL;
+        if (umami_cleanup_counter == 0 || umami_tasks.size() >= UMAMI_MAX_TASKS) {
+            umami_tasks.erase(std::remove_if(umami_tasks.begin(), umami_tasks.end(),
+                                             [](std::future<void>& task) {
+                                                 return task.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
+                                             }),
+                              umami_tasks.end());
+            if (umami_tasks.size() >= UMAMI_MAX_TASKS) {
+                if (isDevMode()) {
+                    std::cerr << "Umami tracking skipped: task queue full" << std::endl;
+                }
+                return;
+            }
+        }
+        umami_tasks.push_back(std::async(std::launch::async, sendRequest));
+    }
 }
 
 std::optional<DbConfig> loadDbConfig(const std::string& path) {
@@ -577,6 +726,7 @@ int main() {
     // Search Endpoint
     CROW_ROUTE(app, "/api/stops/search")
     ([](const crow::request& req){
+        trackUmamiPageview(req);
         auto query = req.url_params.get("q");
         auto city = req.url_params.get("city");
         auto locationParam = req.url_params.get("location");
@@ -599,6 +749,7 @@ int main() {
     // Departures Endpoint
     CROW_ROUTE(app, "/api/stops/<string>")
     ([](const crow::request& req, std::string stopId){
+        trackUmamiPageview(req);
         const char* detailedParam = req.url_params.get("detailed");
         const char* delayParam = req.url_params.get("delay");
 
