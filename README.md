@@ -63,6 +63,7 @@ CREATE TABLE stops (
    last_updated TIMESTAMPTZ DEFAULT NOW()
 );
 ```
+`local_id` stores the provider-specific stop identifier (e.g. `properties.stopId`) when available.
 
 ### Get Departures
 **`GET /api/stops/{stopId}`**
