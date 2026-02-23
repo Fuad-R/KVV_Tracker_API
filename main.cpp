@@ -431,17 +431,21 @@ struct StopRecord {
 };
 
 std::optional<StopRecord> parseStopRecord(const json& stop) {
-    auto stopId = getJsonString(stop, {"id", "stopId", "stopID", "gid"});
+    auto stopId = getJsonString(stop, {"id", "gid", "stopId", "stopID"});
     auto stopName = getJsonString(stop, {"name", "stopName", "stop_name"});
     if (!stopId || !stopName) return std::nullopt;
 
+    const bool hasPrimaryId = stop.contains("id") || stop.contains("gid");
     std::optional<std::string> localId;
     if (stop.contains("properties") && stop.at("properties").is_object()) {
         localId = getJsonString(stop.at("properties"),
                                 {"stopId", "stopID", "stopid", "localId", "local_id"});
     }
     if (!localId) {
-        localId = getJsonString(stop, {"localId", "local_id", "stopId", "stopID", "stopid"});
+        localId = getJsonString(stop, {"localId", "local_id"});
+    }
+    if (!localId && hasPrimaryId) {
+        localId = getJsonString(stop, {"stopId", "stopID", "stopid"});
     }
 
     double latitude = 0.0;
