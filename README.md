@@ -53,6 +53,7 @@ The database must include the following schema:
 ```
 CREATE TABLE stops (
    stop_id TEXT PRIMARY KEY,
+   localid TEXT,
    stop_name TEXT NOT NULL,
    city TEXT,
    mot SMALLINT[],
