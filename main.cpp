@@ -443,12 +443,6 @@ std::optional<StopRecord> parseStopRecord(const json& stop) {
     if (!localId) {
         localId = getJsonString(stop, {"localId", "local_id"});
     }
-    if (!localId) {
-        auto candidate = getJsonString(stop, {"stopId", "stopID", "stopid"});
-        if (candidate && candidate != stopId) {
-            localId = candidate;
-        }
-    }
 
     double latitude = 0.0;
     double longitude = 0.0;
