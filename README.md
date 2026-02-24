@@ -24,6 +24,9 @@ Filter departures by specific platform/track to refine results.
 ### 6. **Delay Tracking**
 Optional real-time delay information for each departure.
 
+### 7. **Service Notifications**
+Query current service alerts and disruptions affecting a specific stop from multiple EFA providers.
+
 ## API Endpoints
 
 ### Search Stops
@@ -91,6 +94,34 @@ Retrieve all upcoming departures from a specific stop.
 
 ---
 
+### Get Current Notifications
+**`GET /api/current_notifs`**
+
+Retrieve current service notifications and alerts affecting a specific stop. Queries multiple EFA providers and returns only notifications that are currently valid (within their validity time range).
+
+**Query Parameters:**
+- `stopID` (required) - Stop identifier to check for notifications
+
+**Response:** JSON array of notification subtitle strings
+
+**Example Request:**
+```
+GET /api/current_notifs?stopID=7000107
+```
+
+**Example Response:**
+```json
+["Knielingen - Wörth: nächtliche Einschränkung wegen Bauarbeiten"]
+```
+
+**Notes:**
+- Queries notifications from multiple EFA providers (efa-bw.de, efa.vrr.de)
+- Filters notifications by current UTC time against validity ranges
+- Returns deduplicated subtitle strings from matching notifications
+- Returns empty array `[]` if no current notifications affect the stop
+
+---
+
 ## Usage Examples
 
 ### Search for a stop
@@ -116,6 +147,11 @@ GET /api/stops/id_1234?track=1
 ### Combined query
 ```
 GET /api/stops/id_1234?detailed=true&delay=true&track=2
+```
+
+### Get service notifications for a stop
+```
+GET /api/current_notifs?stopID=7000107
 ```
 
 ---

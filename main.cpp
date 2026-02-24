@@ -15,6 +15,8 @@
 #include <optional>
 #include <sstream>
 #include <iomanip>
+#include <set>
+#include <ctime>
 #include <libpq-fe.h>
 
 using json = nlohmann::json;
@@ -35,6 +37,12 @@ std::vector<std::future<void>> umami_tasks;
 const std::string Provider_DM_URL = "https://projekte.kvv-efa.de/sl3-alone/XSLT_DM_REQUEST";
 const std::string Provider_SEARCH_URL = "https://projekte.kvv-efa.de/sl3-alone/XSLT_STOPFINDER_REQUEST";
 const std::string DB_CONFIG_PATH = "db_connection.txt";
+
+// --- Notification API Providers (extensible list) ---
+const std::vector<std::string> NOTIFICATION_API_PROVIDERS = {
+    "https://www.efa-bw.de/nvbw/",
+    "https://efa.vrr.de/standard/"
+};
 const std::string DB_CONFIG_CONTAINER_PATH = "/config/db_connection.txt";
 const std::string UMAMI_SCREEN = "0x0";
 const int UMAMI_TIMEOUT_MS = 500;
@@ -726,6 +734,139 @@ json normalizeResponse(const json& ProviderData, bool detailed = false, bool inc
     return result;
 }
 
+// --- Helper: Parse ISO 8601 timestamp to time_t ---
+std::optional<std::time_t> parseISO8601(const std::string& timestamp) {
+    std::tm tm = {};
+    std::istringstream ss(timestamp);
+    ss >> std::get_time(&tm, "%Y-%m-%dT%H:%M:%S");
+    if (ss.fail()) return std::nullopt;
+    // Handle as UTC
+    return timegm(&tm);
+}
+
+// --- Helper: Check if current time is within a validity range ---
+bool isCurrentlyValid(const json& validity) {
+    if (!validity.is_array() || validity.empty()) return false;
+
+    auto now = std::time(nullptr);
+
+    for (const auto& range : validity) {
+        if (!range.contains("from") || !range.contains("to")) continue;
+        if (!range["from"].is_string() || !range["to"].is_string()) continue;
+
+        auto fromTime = parseISO8601(range["from"].get<std::string>());
+        auto toTime = parseISO8601(range["to"].get<std::string>());
+
+        if (!fromTime || !toTime) continue;
+
+        if (now >= *fromTime && now <= *toTime) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// --- Helper: Check if a stop ID is affected by a notification ---
+bool isStopAffected(const json& info, const std::string& stopId) {
+    // Check in affected.stops array
+    if (info.contains("affected") && info["affected"].is_object()) {
+        if (info["affected"].contains("stops") && info["affected"]["stops"].is_array()) {
+            for (const auto& stop : info["affected"]["stops"]) {
+                if (stop.contains("properties") && stop["properties"].is_object()) {
+                    if (stop["properties"].contains("stopId")) {
+                        std::string affectedStopId = stop["properties"]["stopId"].get<std::string>();
+                        if (affectedStopId == stopId) return true;
+                    }
+                }
+                // Also check global ID (e.g., "de:08212:107") - exact match only
+                if (stop.contains("id") && stop["id"].is_string()) {
+                    std::string affectedId = stop["id"].get<std::string>();
+                    if (affectedId == stopId) return true;
+                }
+            }
+        }
+    }
+
+    // Check in properties (concernedStop0, concernedStop1, etc.)
+    if (info.contains("properties") && info["properties"].is_object()) {
+        const auto& props = info["properties"];
+        for (auto it = props.begin(); it != props.end(); ++it) {
+            const std::string& key = it.key();
+            if (key.rfind("concernedStop", 0) == 0 && it->is_string()) {
+                if (it->get<std::string>() == stopId) return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+// --- Helper: Fetch notifications from a single API provider ---
+json fetchNotificationsFromProvider(const std::string& baseUrl, const std::string& stopId) {
+    std::string url = baseUrl + "XML_ADDINFO_REQUEST";
+    cpr::Response r = cpr::Get(
+        cpr::Url{url},
+        cpr::Parameters{
+            {"commonMacro", "addinfo"},
+            {"outputFormat", "rapidJSON"},
+            {"filterPublished", "1"},
+            {"filterShowLineList", "0"},
+            {"filterShowPlaceList", "0"},
+            {"itdLPxx_selStop", stopId}
+        }
+    );
+
+    if (r.status_code != 200) {
+        return json::object();
+    }
+
+    try {
+        return json::parse(r.text);
+    } catch (...) {
+        return json::object();
+    }
+}
+
+// --- Helper: Extract valid notification subtitles for a stop ---
+json extractValidNotifications(const std::string& stopId) {
+    json subtitles = json::array();
+    std::set<std::string> seenSubtitles; // Avoid duplicates
+
+    for (const auto& providerUrl : NOTIFICATION_API_PROVIDERS) {
+        json response = fetchNotificationsFromProvider(providerUrl, stopId);
+
+        // Navigate to infos.current array
+        if (!response.contains("infos") || !response["infos"].is_object()) continue;
+        if (!response["infos"].contains("current") || !response["infos"]["current"].is_array()) continue;
+
+        for (const auto& info : response["infos"]["current"]) {
+            // Check if the stop is affected
+            if (!isStopAffected(info, stopId)) continue;
+
+            // Check if currently valid based on timestamps.validity
+            if (!info.contains("timestamps") || !info["timestamps"].is_object()) continue;
+            if (!info["timestamps"].contains("validity")) continue;
+
+            if (!isCurrentlyValid(info["timestamps"]["validity"])) continue;
+
+            // Extract subtitles from infoLinks
+            if (!info.contains("infoLinks") || !info["infoLinks"].is_array()) continue;
+
+            for (const auto& link : info["infoLinks"]) {
+                if (link.contains("subtitle") && link["subtitle"].is_string()) {
+                    std::string subtitle = link["subtitle"].get<std::string>();
+                    if (!subtitle.empty() && seenSubtitles.find(subtitle) == seenSubtitles.end()) {
+                        seenSubtitles.insert(subtitle);
+                        subtitles.push_back(subtitle);
+                    }
+                }
+            }
+        }
+    }
+
+    return subtitles;
+}
+
 int main() {
     crow::SimpleApp app;
     db_config = loadDbConfig(DB_CONFIG_PATH);
@@ -822,6 +963,24 @@ int main() {
 
         return crow::response(allDepartures.dump());
 });
+
+    // Current Notifications Endpoint
+    CROW_ROUTE(app, "/api/current_notifs")
+    ([](const crow::request& req){
+        trackUmamiPageview(req);
+        auto stopIdParam = req.url_params.get("stopID");
+
+        if (!stopIdParam) {
+            return crow::response(400, R"({"error": "Missing 'stopID' parameter"})");
+        }
+
+        std::string stopId = std::string(stopIdParam);
+        json notifications = extractValidNotifications(stopId);
+
+        auto response = crow::response(notifications.dump());
+        response.set_header("Content-Type", "application/json");
+        return response;
+    });
 
     app.port(8080).multithreaded().run();
 }
