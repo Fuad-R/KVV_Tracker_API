@@ -32,6 +32,7 @@ std::mutex umami_mutex;
 std::vector<std::future<void>> umami_tasks;
 std::mutex addinfo_mutex;
 std::vector<std::future<void>> addinfo_tasks;
+size_t addinfo_cleanup_counter = 0;
 
 // --- Configuration ---
 const std::string Provider_DM_URL = "https://projekte.kvv-efa.de/sl3-alone/XSLT_DM_REQUEST";
@@ -85,6 +86,7 @@ std::string trim(const std::string& input) {
     return std::string(start, end);
 }
 
+// Joins base URL and path, handling duplicate or missing slashes.
 std::string joinUrlPath(const std::string& baseUrl, const std::string& path) {
     if (baseUrl.empty()) return path;
     if (path.empty()) return baseUrl;
@@ -233,7 +235,7 @@ void trackUmamiPageview(const crow::request& req) {
 void queueAddInfoRequests(const std::string& stopId) {
     if (stopId.empty() || ADDINFO_PROVIDER_BASE_URLS.empty()) return;
 
-    auto sendRequests = [stopId]() {
+    auto sendRequest = [stopId]() {
         for (const auto& baseUrl : ADDINFO_PROVIDER_BASE_URLS) {
             std::string endpoint = joinUrlPath(baseUrl, "XML_ADDINFO_REQUEST");
             auto response = cpr::Get(
@@ -249,16 +251,20 @@ void queueAddInfoRequests(const std::string& stopId) {
                 cpr::Timeout{ADDINFO_TIMEOUT_MS}
             );
             if (isDevMode() && (response.error || response.status_code >= 400)) {
-                std::cerr << "AddInfo request failed: "
-                          << endpoint << " "
-                          << (response.error ? response.error.message : std::to_string(response.status_code))
-                          << std::endl;
+                if (response.error) {
+                    std::cerr << "AddInfo request failed: "
+                              << endpoint << " "
+                              << response.error.message << std::endl;
+                } else {
+                    std::cerr << "AddInfo request returned HTTP "
+                              << response.status_code << ": "
+                              << endpoint << std::endl;
+                }
             }
         }
     };
 
     std::lock_guard<std::mutex> lock(addinfo_mutex);
-    static size_t addinfo_cleanup_counter = 0;
     addinfo_cleanup_counter = (addinfo_cleanup_counter + 1) % ADDINFO_CLEANUP_INTERVAL;
     if (addinfo_cleanup_counter == 0 || addinfo_tasks.size() >= ADDINFO_MAX_TASKS) {
         addinfo_tasks.erase(std::remove_if(addinfo_tasks.begin(), addinfo_tasks.end(),
@@ -274,7 +280,7 @@ void queueAddInfoRequests(const std::string& stopId) {
         }
     }
 
-    addinfo_tasks.push_back(std::async(std::launch::async, sendRequests));
+    addinfo_tasks.push_back(std::async(std::launch::async, sendRequest));
 }
 
 std::optional<DbConfig> loadDbConfig(const std::string& path) {
