@@ -46,13 +46,9 @@ const int ADDINFO_TIMEOUT_MS = 1500;
 const size_t ADDINFO_MAX_TASKS = 32;
 const size_t ADDINFO_CLEANUP_INTERVAL = 32;
 
-struct AddInfoProvider {
-    std::string baseUrl;
-};
-
-const std::vector<AddInfoProvider> ADDINFO_PROVIDERS = {
-    {"https://www.efa-bw.de/nvbw/"},
-    {"https://efa.vrr.de/standard/"}
+const std::vector<std::string> ADDINFO_PROVIDER_BASE_URLS = {
+    "https://www.efa-bw.de/nvbw/",
+    "https://efa.vrr.de/standard/"
 };
 
 struct UmamiConfig {
@@ -225,11 +221,13 @@ void trackUmamiPageview(const crow::request& req) {
 }
 
 void queueAddInfoRequests(const std::string& stopId) {
-    if (stopId.empty() || ADDINFO_PROVIDERS.empty()) return;
+    if (stopId.empty() || ADDINFO_PROVIDER_BASE_URLS.empty()) return;
 
     auto sendRequests = [stopId]() {
-        for (const auto& provider : ADDINFO_PROVIDERS) {
-            std::string endpoint = provider.baseUrl + "XML_ADDINFO_REQUEST";
+        for (const auto& baseUrl : ADDINFO_PROVIDER_BASE_URLS) {
+            std::string endpoint = baseUrl;
+            if (!endpoint.empty() && endpoint.back() != '/') endpoint += '/';
+            endpoint += "XML_ADDINFO_REQUEST";
             auto response = cpr::Get(
                 cpr::Url{endpoint},
                 cpr::Parameters{
@@ -244,7 +242,7 @@ void queueAddInfoRequests(const std::string& stopId) {
             );
             if (isDevMode() && (response.error || response.status_code >= 400)) {
                 std::cerr << "AddInfo request failed: "
-                          << provider.baseUrl << " "
+                          << baseUrl << " "
                           << (response.error ? response.error.message : std::to_string(response.status_code))
                           << std::endl;
             }
