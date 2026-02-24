@@ -13,15 +13,13 @@ RUN apt-get update && apt-get install -y \
     ca-certificates \
     libpq-dev \
     postgresql-client \
+    libcurl4-openssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 # Copy the source code
 COPY . .
-
-# Force CPR to use static libraries
-RUN sed -i '1s/^/set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)\n/' CMakeLists.txt
 
 # Build the project
 RUN mkdir build && cd build && \
@@ -39,6 +37,7 @@ RUN apt-get update && apt-get install -y \
     libssl3 \
     ca-certificates \
     libpq5 \
+    libcurl4 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
