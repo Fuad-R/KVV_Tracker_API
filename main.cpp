@@ -85,6 +85,16 @@ std::string trim(const std::string& input) {
     return std::string(start, end);
 }
 
+std::string joinUrlPath(const std::string& baseUrl, const std::string& path) {
+    if (baseUrl.empty()) return path;
+    if (path.empty()) return baseUrl;
+    bool baseHasSlash = baseUrl.back() == '/';
+    bool pathHasSlash = path.front() == '/';
+    if (baseHasSlash && pathHasSlash) return baseUrl + path.substr(1);
+    if (!baseHasSlash && !pathHasSlash) return baseUrl + "/" + path;
+    return baseUrl + path;
+}
+
 bool isDevMode() {
     static const bool isDev = []() {
         const char* devEnv = std::getenv("dev");
@@ -225,9 +235,7 @@ void queueAddInfoRequests(const std::string& stopId) {
 
     auto sendRequests = [stopId]() {
         for (const auto& baseUrl : ADDINFO_PROVIDER_BASE_URLS) {
-            std::string endpoint = baseUrl;
-            if (!endpoint.empty() && endpoint.back() != '/') endpoint += '/';
-            endpoint += "XML_ADDINFO_REQUEST";
+            std::string endpoint = joinUrlPath(baseUrl, "XML_ADDINFO_REQUEST");
             auto response = cpr::Get(
                 cpr::Url{endpoint},
                 cpr::Parameters{
@@ -242,7 +250,7 @@ void queueAddInfoRequests(const std::string& stopId) {
             );
             if (isDevMode() && (response.error || response.status_code >= 400)) {
                 std::cerr << "AddInfo request failed: "
-                          << baseUrl << " "
+                          << endpoint << " "
                           << (response.error ? response.error.message : std::to_string(response.status_code))
                           << std::endl;
             }
