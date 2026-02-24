@@ -233,7 +233,7 @@ void queueAddInfoRequests(const std::string& stopId) {
             auto response = cpr::Get(
                 cpr::Url{endpoint},
                 cpr::Parameters{
-                    {"commonMacrot", "addinfo"},
+                    {"commonMacro", "addinfo"},
                     {"outputFormat", "rapidJSON"},
                     {"filterPublished", "1"},
                     {"filterShowLineList", "0"},
