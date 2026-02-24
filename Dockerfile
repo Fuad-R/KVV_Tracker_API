@@ -1,10 +1,9 @@
 # Stage 1: Build the application
 FROM ubuntu:22.04 AS builder
 
-# Prevent interactive prompts during package installation
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install build dependencies + PostgreSQL dev libraries
+# Install build dependencies
 RUN apt-get update && apt-get install -y \
     cmake \
     build-essential \
@@ -13,44 +12,48 @@ RUN apt-get update && apt-get install -y \
     ca-certificates \
     libpq-dev \
     postgresql-client \
+    libcurl4-openssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Copy the source code
+# Copy source
 COPY . .
 
-# Force CPR to use static libraries
-RUN sed -i '1s/^/set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)\n/' CMakeLists.txt
-
-# Build the project
+# Build project + install libraries into /usr/local
 RUN mkdir build && cd build && \
-    cmake .. && \
-    make -j$(nproc)
-
+    cmake .. -DCMAKE_BUILD_TYPE=Release && \
+    make -j$(nproc) && \
+    make install
 
 # Stage 2: Runtime image
 FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install runtime dependencies (including PostgreSQL runtime lib)
+# Install runtime dependencies
 RUN apt-get update && apt-get install -y \
     libssl3 \
     ca-certificates \
     libpq5 \
+    libcurl4 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Copy compiled binary
+# Copy binary
 COPY --from=builder /app/build/kvv_aggregator .
 
-# Copy optional data file
+# Copy installed libraries from builder
+COPY --from=builder /usr/local/lib /usr/local/lib
+COPY --from=builder /usr/local/include /usr/local/include
+
+# Ensure linker can find libs
+RUN echo "/usr/local/lib" > /etc/ld.so.conf.d/local.conf && ldconfig
+
+# Optional data file
 COPY --from=builder /app/vehicle_types.txt .
 
-# Expose port
 EXPOSE 8080
 
-# Run
 CMD ["./kvv_aggregator"]
