@@ -45,6 +45,10 @@ WORKDIR /app
 # Copy compiled binary
 COPY --from=builder /app/build/kvv_aggregator .
 
+# Copy libcpr shared library from builder
+COPY --from=builder /app/build/_deps/cpr-build/cpr/libcpr.so.1 /usr/local/lib/
+RUN ldconfig
+
 # Copy optional data file
 COPY --from=builder /app/vehicle_types.txt .
 
