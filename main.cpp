@@ -778,10 +778,10 @@ bool isStopAffected(const json& info, const std::string& stopId) {
                         if (affectedStopId == stopId) return true;
                     }
                 }
-                // Also check global ID (e.g., "de:08212:107")
+                // Also check global ID (e.g., "de:08212:107") - exact match only
                 if (stop.contains("id") && stop["id"].is_string()) {
                     std::string affectedId = stop["id"].get<std::string>();
-                    if (affectedId == stopId || affectedId.find(stopId) != std::string::npos) return true;
+                    if (affectedId == stopId) return true;
                 }
             }
         }
@@ -830,7 +830,7 @@ json fetchNotificationsFromProvider(const std::string& baseUrl, const std::strin
 // --- Helper: Extract valid notification subtitles for a stop ---
 json extractValidNotifications(const std::string& stopId) {
     json subtitles = json::array();
-    std::set<std::string> seen; // Avoid duplicates
+    std::set<std::string> seenSubtitles; // Avoid duplicates
 
     for (const auto& providerUrl : NOTIFICATION_API_PROVIDERS) {
         json response = fetchNotificationsFromProvider(providerUrl, stopId);
@@ -855,8 +855,8 @@ json extractValidNotifications(const std::string& stopId) {
             for (const auto& link : info["infoLinks"]) {
                 if (link.contains("subtitle") && link["subtitle"].is_string()) {
                     std::string subtitle = link["subtitle"].get<std::string>();
-                    if (!subtitle.empty() && seen.find(subtitle) == seen.end()) {
-                        seen.insert(subtitle);
+                    if (!subtitle.empty() && seenSubtitles.find(subtitle) == seenSubtitles.end()) {
+                        seenSubtitles.insert(subtitle);
                         subtitles.push_back(subtitle);
                     }
                 }
