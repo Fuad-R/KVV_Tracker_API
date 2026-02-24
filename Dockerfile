@@ -1,10 +1,9 @@
 # Stage 1: Build the application
 FROM ubuntu:22.04 AS builder
 
-# Prevent interactive prompts during package installation
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install build dependencies + PostgreSQL dev libraries
+# Install build dependencies
 RUN apt-get update && apt-get install -y \
     cmake \
     build-essential \
@@ -18,24 +17,21 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-# Copy the source code
+# Copy source
 COPY . .
 
-# Build the project
+# Build project + install libraries into /usr/local
 RUN mkdir build && cd build && \
-    cmake .. && \
+    cmake .. -DCMAKE_BUILD_TYPE=Release && \
     make -j$(nproc) && \
-    # Copy shared libraries to a known location for the runtime stage
-    mkdir -p /app/libs && \
-    find /app/build -name "libcpr.so*" -exec cp {} /app/libs/ \;
-
+    make install
 
 # Stage 2: Runtime image
 FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install runtime dependencies (including PostgreSQL runtime lib)
+# Install runtime dependencies
 RUN apt-get update && apt-get install -y \
     libssl3 \
     ca-certificates \
@@ -45,18 +41,19 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-# Copy compiled binary
+# Copy binary
 COPY --from=builder /app/build/kvv_aggregator .
 
-# Copy libcpr shared library from builder
-COPY --from=builder /app/libs/libcpr.so* /usr/local/lib/
-RUN ldconfig
+# Copy installed libraries from builder
+COPY --from=builder /usr/local/lib /usr/local/lib
+COPY --from=builder /usr/local/include /usr/local/include
 
-# Copy optional data file
+# Ensure linker can find libs
+RUN echo "/usr/local/lib" > /etc/ld.so.conf.d/local.conf && ldconfig
+
+# Optional data file
 COPY --from=builder /app/vehicle_types.txt .
 
-# Expose port
 EXPOSE 8080
 
-# Run
 CMD ["./kvv_aggregator"]
