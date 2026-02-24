@@ -24,7 +24,10 @@ COPY . .
 # Build the project
 RUN mkdir build && cd build && \
     cmake .. && \
-    make -j$(nproc)
+    make -j$(nproc) && \
+    # Copy shared libraries to a known location for the runtime stage
+    mkdir -p /app/libs && \
+    find /app/build -name "libcpr.so*" -exec cp {} /app/libs/ \;
 
 
 # Stage 2: Runtime image
@@ -44,6 +47,10 @@ WORKDIR /app
 
 # Copy compiled binary
 COPY --from=builder /app/build/kvv_aggregator .
+
+# Copy libcpr shared library from builder
+COPY --from=builder /app/libs/libcpr.so* /usr/local/lib/
+RUN ldconfig
 
 # Copy optional data file
 COPY --from=builder /app/vehicle_types.txt .
