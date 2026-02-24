@@ -30,6 +30,8 @@ std::map<std::string, CacheEntry> stop_cache;
 const int CACHE_TTL_SECONDS = 30;
 std::mutex umami_mutex;
 std::vector<std::future<void>> umami_tasks;
+std::mutex addinfo_mutex;
+std::vector<std::future<void>> addinfo_tasks;
 
 // --- Configuration ---
 const std::string Provider_DM_URL = "https://projekte.kvv-efa.de/sl3-alone/XSLT_DM_REQUEST";
@@ -40,6 +42,18 @@ const std::string UMAMI_SCREEN = "0x0";
 const int UMAMI_TIMEOUT_MS = 500;
 const size_t UMAMI_MAX_TASKS = 32;
 const size_t UMAMI_CLEANUP_INTERVAL = 32;
+const int ADDINFO_TIMEOUT_MS = 1500;
+const size_t ADDINFO_MAX_TASKS = 32;
+const size_t ADDINFO_CLEANUP_INTERVAL = 32;
+
+struct AddInfoProvider {
+    std::string baseUrl;
+};
+
+const std::vector<AddInfoProvider> ADDINFO_PROVIDERS = {
+    {"https://www.efa-bw.de/nvbw/"},
+    {"https://efa.vrr.de/standard/"}
+};
 
 struct UmamiConfig {
     std::string host;
@@ -208,6 +222,53 @@ void trackUmamiPageview(const crow::request& req) {
         }
         umami_tasks.push_back(std::async(std::launch::async, sendRequest));
     }
+}
+
+void queueAddInfoRequests(const std::string& stopId) {
+    if (stopId.empty() || ADDINFO_PROVIDERS.empty()) return;
+
+    auto sendRequests = [stopId]() {
+        for (const auto& provider : ADDINFO_PROVIDERS) {
+            std::string endpoint = provider.baseUrl + "XML_ADDINFO_REQUEST";
+            auto response = cpr::Get(
+                cpr::Url{endpoint},
+                cpr::Parameters{
+                    {"commonMacrot", "addinfo"},
+                    {"outputFormat", "rapidJSON"},
+                    {"filterPublished", "1"},
+                    {"filterShowLineList", "0"},
+                    {"filterShowPlaceList", "0"},
+                    {"itdLPxx_selStop", stopId}
+                },
+                cpr::Timeout{ADDINFO_TIMEOUT_MS}
+            );
+            if (isDevMode() && (response.error || response.status_code >= 400)) {
+                std::cerr << "AddInfo request failed: "
+                          << provider.baseUrl << " "
+                          << (response.error ? response.error.message : std::to_string(response.status_code))
+                          << std::endl;
+            }
+        }
+    };
+
+    std::lock_guard<std::mutex> lock(addinfo_mutex);
+    static size_t addinfo_cleanup_counter = 0;
+    addinfo_cleanup_counter = (addinfo_cleanup_counter + 1) % ADDINFO_CLEANUP_INTERVAL;
+    if (addinfo_cleanup_counter == 0 || addinfo_tasks.size() >= ADDINFO_MAX_TASKS) {
+        addinfo_tasks.erase(std::remove_if(addinfo_tasks.begin(), addinfo_tasks.end(),
+                                           [](std::future<void>& task) {
+                                               return task.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
+                                           }),
+                            addinfo_tasks.end());
+        if (addinfo_tasks.size() >= ADDINFO_MAX_TASKS) {
+            if (isDevMode()) {
+                std::cerr << "AddInfo requests skipped: task queue full" << std::endl;
+            }
+            return;
+        }
+    }
+
+    addinfo_tasks.push_back(std::async(std::launch::async, sendRequests));
 }
 
 std::optional<DbConfig> loadDbConfig(const std::string& path) {
@@ -768,6 +829,8 @@ int main() {
 
         bool detailed = (detailedParam && (std::string(detailedParam) == "true" || std::string(detailedParam) == "1"));
         bool includeDelay = (delayParam && (std::string(delayParam) == "true" || std::string(delayParam) == "1"));
+
+        queueAddInfoRequests(stopId);
 
         // Cache Check - include delay in cache key
         json allDepartures;
