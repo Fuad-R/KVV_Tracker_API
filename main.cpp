@@ -34,7 +34,7 @@ const std::string Provider_DM_URL = "https://projekte.kvv-efa.de/sl3-alone/XSLT_
 const std::string Provider_SEARCH_URL = "https://projekte.kvv-efa.de/sl3-alone/XSLT_STOPFINDER_REQUEST";
 const std::string DB_CONFIG_PATH = "db_connection.txt";
 
-// --- Notification API Providers (extensible list) ---
+// --- Notification API Providers (extensible) ---
 const std::vector<std::string> NOTIFICATION_API_PROVIDERS = {
     "https://www.efa-bw.de/nvbw/",
     "https://efa.vrr.de/standard/"
@@ -68,6 +68,8 @@ std::string trim(const std::string& input) {
     if (start >= end) return "";
     return std::string(start, end);
 }
+
+// --- Helper: Database Configuration ---
 
 std::optional<DbConfig> loadDbConfig(const std::string& path) {
     std::ifstream file(path);
@@ -116,6 +118,8 @@ PGconn* connectToDatabase(const DbConfig& config) {
     return PQconnectdbParams(keywords, values, 0);
 }
 
+// --- Helper: JSON Conversion Utilities ---
+
 std::optional<std::string> jsonToString(const json& value) {
     if (value.is_string()) return value.get<std::string>();
     if (value.is_number_integer()) return std::to_string(value.get<long long>());
@@ -154,6 +158,8 @@ std::string formatDouble(double value) {
     stream << std::fixed << std::setprecision(8) << value;
     return stream.str();
 }
+
+// --- Helper: MOT (Mode of Transport) Parsing ---
 
 std::optional<std::string> buildMotArray(const json& stop) {
     std::vector<int> motValues;
@@ -215,6 +221,8 @@ std::optional<std::string> buildMotArray(const json& stop) {
     stream << "}";
     return stream.str();
 }
+
+// --- Helper: Coordinate Extraction ---
 
 bool extractCoordinates(const json& stop, double& lat, double& lon) {
     auto extractFromObject = [&](const json& coord) -> bool {
@@ -278,6 +286,8 @@ bool extractCoordinates(const json& stop, double& lat, double& lon) {
 
     return false;
 }
+
+// --- Stop Record Parsing ---
 
 struct StopRecord {
     std::string stop_id;
@@ -360,6 +370,8 @@ std::vector<StopRecord> extractStopRecords(const json& searchResult) {
     return records;
 }
 
+// --- Helper: Database Persistence ---
+
 void ensureStopsInDatabase(const json& searchResult, const std::string& originalSearch) {
     if (!db_config) return;
 
@@ -411,17 +423,16 @@ void ensureStopsInDatabase(const json& searchResult, const std::string& original
 }
 
 // --- Helper: Search Stops ---
-// Accepts 'city' parameter but ignores it (no-op)
-json searchStopsProvider(const std::string& query, const std::string& city = "", bool includeLocation = false) {
+
+json searchStopsProvider(const std::string& query, const std::string& /*city*/ = "", bool includeLocation = false) {
     if (query.empty()) return json::array();
 
-    // Configuration based on the user's sample and PDF
     cpr::Parameters params{
             {"outputFormat", "rapidJSON"},
             {"type_sf", "any"},
             {"name_sf", query},
-            {"anyObjFilter_sf", "2"}, // Filter for stops/stations
-            {"coordOutputFormat", "WGS84[dd.ddddd]"} // Request decimal coordinates
+            {"anyObjFilter_sf", "2"},                  // Stops/stations only
+            {"coordOutputFormat", "WGS84[dd.ddddd]"}   // Decimal degree coordinates
     };
 
     cpr::Response r = cpr::Get(
@@ -462,7 +473,7 @@ json fetchDeparturesProvider(const std::string& stopId) {
     }
 }
 
-// --- Helper: Normalize Data ---
+// --- Helper: Normalize Departure Data ---
 json normalizeResponse(const json& ProviderData, bool detailed = false, bool includeDelay = false) {
     json result = json::array();
     if (!ProviderData.contains("departureList")) return result;
@@ -477,19 +488,19 @@ json normalizeResponse(const json& ProviderData, bool detailed = false, bool inc
     for (const auto& dep : ProviderData["departureList"]) {
         json item;
 
-        // Line Info
+        // Line info (number, direction, MOT)
         if (dep.contains("servingLine")) {
             item["line"] = dep["servingLine"].value("number", "?");
             item["direction"] = dep["servingLine"].value("direction", "Unknown");
 
-            // ADD THIS: Extract MOT (Mode of Transport)
+            // Mode of Transport type
             if (dep["servingLine"].contains("motType")) {
                 item["mot"] = std::stoi(dep["servingLine"].value("motType", "-1"));
             } else {
-                item["mot"] = -1; // Unknown/not provided
+                item["mot"] = -1;
             }
 
-            // Delay field (from servingLine.delay)
+            // Delay in minutes
             if (includeDelay && dep["servingLine"].contains("delay")) {
                 try {
                     int delayMinutes = std::stoi(dep["servingLine"].value("delay", "0"));
@@ -500,7 +511,7 @@ json normalizeResponse(const json& ProviderData, bool detailed = false, bool inc
             }
 
             if (detailed) {
-                // ... (rest of your detailed code stays the same)
+                // Accessibility flags from departure attributes
                 bool hasPlanLowFloor = false;
                 bool hasPlanWheelchair = false;
                 bool planLowFloor = false;
@@ -557,19 +568,19 @@ json normalizeResponse(const json& ProviderData, bool detailed = false, bool inc
             }
         }
 
-        // Platform
+        // Platform name
         if (dep.contains("platform")) item["platform"] = dep.value("platform", "");
         else if (dep.contains("platformName")) item["platform"] = dep.value("platformName", "");
         else item["platform"] = "Unknown";
 
-        // Countdown
+        // Minutes until departure
         if (dep.contains("countdown")) item["minutes_remaining"] = std::stoi(dep.value("countdown", "0"));
         else item["minutes_remaining"] = 0;
 
-        // Realtime
+        // Whether real-time data is available
         item["is_realtime"] = dep.contains("realDateTime");
 
-        // Hints
+        // Additional hints (detailed mode only)
         if (detailed && dep.contains("hints") && dep["hints"].is_array()) {
             json hintsArray = json::array();
             for (const auto& h : dep["hints"]) {
@@ -585,17 +596,17 @@ json normalizeResponse(const json& ProviderData, bool detailed = false, bool inc
     return result;
 }
 
-// --- Helper: Parse ISO 8601 timestamp to time_t ---
+// --- Helper: Parse ISO 8601 Timestamp ---
+
 std::optional<std::time_t> parseISO8601(const std::string& timestamp) {
     std::tm tm = {};
     std::istringstream ss(timestamp);
     ss >> std::get_time(&tm, "%Y-%m-%dT%H:%M:%S");
     if (ss.fail()) return std::nullopt;
-    // Handle as UTC
-    return timegm(&tm);
+    return timegm(&tm); // Interpret as UTC
 }
 
-// --- Helper: Check if current time is within a validity range ---
+// --- Helper: Validity Time Range Check ---
 bool isCurrentlyValid(const json& validity) {
     if (!validity.is_array() || validity.empty()) return false;
 
@@ -617,9 +628,10 @@ bool isCurrentlyValid(const json& validity) {
     return false;
 }
 
-// --- Helper: Check if a stop ID is affected by a notification ---
+// --- Helper: Stop Notification Matching ---
+
 bool isStopAffected(const json& info, const std::string& stopId) {
-    // Check in affected.stops array
+    // Match against affected.stops array
     if (info.contains("affected") && info["affected"].is_object()) {
         if (info["affected"].contains("stops") && info["affected"]["stops"].is_array()) {
             for (const auto& stop : info["affected"]["stops"]) {
@@ -629,7 +641,7 @@ bool isStopAffected(const json& info, const std::string& stopId) {
                         if (affectedStopId == stopId) return true;
                     }
                 }
-                // Also check global ID (e.g., "de:08212:107") - exact match only
+                // Match by global ID (e.g., "de:08212:107")
                 if (stop.contains("id") && stop["id"].is_string()) {
                     std::string affectedId = stop["id"].get<std::string>();
                     if (affectedId == stopId) return true;
@@ -638,7 +650,7 @@ bool isStopAffected(const json& info, const std::string& stopId) {
         }
     }
 
-    // Check in properties (concernedStop0, concernedStop1, etc.)
+    // Match against concernedStop properties (concernedStop0, concernedStop1, ...)
     if (info.contains("properties") && info["properties"].is_object()) {
         const auto& props = info["properties"];
         for (auto it = props.begin(); it != props.end(); ++it) {
@@ -652,7 +664,7 @@ bool isStopAffected(const json& info, const std::string& stopId) {
     return false;
 }
 
-// --- Helper: Fetch notifications from a single API provider ---
+// --- Helper: Fetch Notifications from Provider ---
 json fetchNotificationsFromProvider(const std::string& baseUrl, const std::string& stopId) {
     std::string url = baseUrl + "XML_ADDINFO_REQUEST";
     cpr::Response r = cpr::Get(
@@ -678,29 +690,28 @@ json fetchNotificationsFromProvider(const std::string& baseUrl, const std::strin
     }
 }
 
-// --- Helper: Extract valid notification subtitles for a stop ---
+// --- Helper: Extract Valid Notifications for a Stop ---
+
 json extractValidNotifications(const std::string& stopId) {
     json subtitles = json::array();
-    std::set<std::string> seenSubtitles; // Avoid duplicates
+    std::set<std::string> seenSubtitles;
 
     for (const auto& providerUrl : NOTIFICATION_API_PROVIDERS) {
         json response = fetchNotificationsFromProvider(providerUrl, stopId);
 
-        // Navigate to infos.current array
         if (!response.contains("infos") || !response["infos"].is_object()) continue;
         if (!response["infos"].contains("current") || !response["infos"]["current"].is_array()) continue;
 
         for (const auto& info : response["infos"]["current"]) {
-            // Check if the stop is affected
             if (!isStopAffected(info, stopId)) continue;
 
-            // Check if currently valid based on timestamps.validity
+            // Skip notifications outside their validity window
             if (!info.contains("timestamps") || !info["timestamps"].is_object()) continue;
             if (!info["timestamps"].contains("validity")) continue;
 
             if (!isCurrentlyValid(info["timestamps"]["validity"])) continue;
 
-            // Extract subtitles from infoLinks
+            // Collect unique subtitles from infoLinks
             if (!info.contains("infoLinks") || !info["infoLinks"].is_array()) continue;
 
             for (const auto& link : info["infoLinks"]) {
@@ -728,7 +739,7 @@ int main() {
         std::cerr << "Database config unavailable. Stop persistence disabled." << std::endl;
     }
 
-    // Search Endpoint
+    // --- Route: Search Stops ---
     CROW_ROUTE(app, "/api/stops/search")
     ([](const crow::request& req){
         auto query = req.url_params.get("q");
@@ -750,7 +761,7 @@ int main() {
 
     });
 
-    // Departures Endpoint
+    // --- Route: Departures ---
     CROW_ROUTE(app, "/api/stops/<string>")
     ([](const crow::request& req, std::string stopId){
         const char* detailedParam = req.url_params.get("detailed");
@@ -759,7 +770,7 @@ int main() {
         bool detailed = (detailedParam && (std::string(detailedParam) == "true" || std::string(detailedParam) == "1"));
         bool includeDelay = (delayParam && (std::string(delayParam) == "true" || std::string(delayParam) == "1"));
 
-        // Cache Check - include delay in cache key
+        // Build cache key from stop ID and enabled options
         json allDepartures;
         bool cacheHit = false;
         std::string cacheKey = stopId + (detailed ? "_detailed" : "") + (includeDelay ? "_delay" : "");
@@ -813,7 +824,7 @@ int main() {
         return crow::response(allDepartures.dump());
 });
 
-    // Current Notifications Endpoint
+    // --- Route: Current Notifications ---
     CROW_ROUTE(app, "/api/current_notifs")
     ([](const crow::request& req){
         auto stopIdParam = req.url_params.get("stopID");
