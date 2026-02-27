@@ -33,6 +33,7 @@ Makefile
 CPackConfig.cmake
 CPackSourceConfig.cmake
 _deps/
+_codeql_detected_source_root
 kvv_aggregator
 db_connection.txt
 
