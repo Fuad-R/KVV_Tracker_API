@@ -1,0 +1,22 @@
+Business Source License 1.1
+© 2026 Fuad Rizik
+
+This software and associated documentation ("Software") are made available under the Business Source License 1.1 (BSL), which allows you to **view, modify, and use the Software for non-production, personal, or educational purposes only**. Any commercial use, including running the Software as part of a service that is offered commercially or monetarily exploited, is strictly prohibited until the Change Date specified below.
+
+1. Change Date: January 1, 2030
+   On or after this date, the Software will be licensed under the Apache License 2.0, and all restrictions above will be lifted.
+
+2. Permitted Uses:
+   - Personal use
+   - Educational use
+   - Research, study, or internal testing
+
+3. Prohibited Uses:
+   - Hosting the Software commercially
+   - Selling the Software or any derivative works
+   - Any other commercial exploitation without express permission
+
+4. Disclaimer:
+   The Software is provided "AS IS", without warranty of any kind. The author is not liable for any damages resulting from the use of the Software.
+
+Full license text: https://mariadb.com/bsl11/
