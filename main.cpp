@@ -15,6 +15,7 @@
 #include <iomanip>
 #include <set>
 #include <ctime>
+#include <regex>
 #include <libpq-fe.h>
 
 using json = nlohmann::json;
@@ -28,6 +29,7 @@ struct CacheEntry {
 std::mutex cache_mutex;
 std::map<std::string, CacheEntry> stop_cache;
 const int CACHE_TTL_SECONDS = 30;
+const size_t MAX_CACHE_ENTRIES = 10000;
 
 // --- Configuration ---
 const std::string Provider_DM_URL = "https://projekte.kvv-efa.de/sl3-alone/XSLT_DM_REQUEST";
@@ -40,6 +42,46 @@ const std::vector<std::string> NOTIFICATION_API_PROVIDERS = {
     "https://efa.vrr.de/standard/"
 };
 const std::string DB_CONFIG_CONTAINER_PATH = "/config/db_connection.txt";
+const long UPSTREAM_TIMEOUT_SECONDS = 15;
+const size_t MAX_QUERY_LENGTH = 200;
+const size_t MAX_STOPID_LENGTH = 100;
+
+// --- Input Validation ---
+bool isValidStopId(const std::string& stopId) {
+    if (stopId.empty() || stopId.size() > MAX_STOPID_LENGTH) return false;
+    static const std::regex stopIdPattern("^[a-zA-Z0-9:_. -]+$");
+    return std::regex_match(stopId, stopIdPattern);
+}
+
+bool isValidSearchQuery(const std::string& query) {
+    if (query.empty() || query.size() > MAX_QUERY_LENGTH) return false;
+    for (unsigned char c : query) {
+        if (c < 0x20 && c != '\t') return false;
+    }
+    return true;
+}
+
+// --- Cache Eviction ---
+void evictExpiredCacheEntries() {
+    auto now = std::chrono::steady_clock::now();
+    for (auto it = stop_cache.begin(); it != stop_cache.end(); ) {
+        if (std::chrono::duration_cast<std::chrono::seconds>(now - it->second.timestamp).count() >= CACHE_TTL_SECONDS) {
+            it = stop_cache.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+// --- Security: Set common security headers on a response ---
+void setSecurityHeaders(crow::response& res) {
+    res.set_header("Content-Type", "application/json");
+    res.set_header("X-Content-Type-Options", "nosniff");
+    res.set_header("X-Frame-Options", "DENY");
+    res.set_header("Content-Security-Policy", "default-src 'none'");
+    res.set_header("Cache-Control", "no-store");
+    res.set_header("X-XSS-Protection", "0");
+}
 
 struct DbConfig {
     std::string host;
@@ -99,6 +141,10 @@ std::optional<DbConfig> loadDbConfig(const std::string& path) {
         config.user.empty() || config.password.empty()) {
         std::cerr << "Database config missing required fields in: " << path << std::endl;
         return std::nullopt;
+    }
+
+    if (config.sslmode.empty()) {
+        config.sslmode = "require";
     }
 
     return config;
@@ -437,7 +483,8 @@ json searchStopsProvider(const std::string& query, const std::string& /*city*/ =
 
     cpr::Response r = cpr::Get(
         cpr::Url{Provider_SEARCH_URL},
-        params
+        params,
+        cpr::Timeout{UPSTREAM_TIMEOUT_SECONDS * 1000}
     );
 
     if (r.status_code != 200) return {{"error", "Upstream Error"}};
@@ -461,7 +508,8 @@ json fetchDeparturesProvider(const std::string& stopId) {
             {"name_dm", stopId},
             {"useRealtime", "1"},
             {"limit", "40"}
-        }
+        },
+        cpr::Timeout{UPSTREAM_TIMEOUT_SECONDS * 1000}
     );
 
     if (r.status_code != 200) return {{"error", "Upstream Provider error"}, {"code", r.status_code}};
@@ -495,7 +543,11 @@ json normalizeResponse(const json& ProviderData, bool detailed = false, bool inc
 
             // Mode of Transport type
             if (dep["servingLine"].contains("motType")) {
-                item["mot"] = std::stoi(dep["servingLine"].value("motType", "-1"));
+                try {
+                    item["mot"] = std::stoi(dep["servingLine"].value("motType", "-1"));
+                } catch (...) {
+                    item["mot"] = -1;
+                }
             } else {
                 item["mot"] = -1;
             }
@@ -574,7 +626,13 @@ json normalizeResponse(const json& ProviderData, bool detailed = false, bool inc
         else item["platform"] = "Unknown";
 
         // Minutes until departure
-        if (dep.contains("countdown")) item["minutes_remaining"] = std::stoi(dep.value("countdown", "0"));
+        if (dep.contains("countdown")) {
+            try {
+                item["minutes_remaining"] = std::stoi(dep.value("countdown", "0"));
+            } catch (...) {
+                item["minutes_remaining"] = 0;
+            }
+        }
         else item["minutes_remaining"] = 0;
 
         // Whether real-time data is available
@@ -676,7 +734,8 @@ json fetchNotificationsFromProvider(const std::string& baseUrl, const std::strin
             {"filterShowLineList", "0"},
             {"filterShowPlaceList", "0"},
             {"itdLPxx_selStop", stopId}
-        }
+        },
+        cpr::Timeout{UPSTREAM_TIMEOUT_SECONDS * 1000}
     );
 
     if (r.status_code != 200) {
@@ -748,15 +807,33 @@ int main() {
 
         bool includeLocation = (locationParam && (std::string(locationParam) == "true" || std::string(locationParam) == "1"));
 
-        if (!query) return crow::response(400, "Missing 'q' parameter");
+        if (!query) {
+            auto response = crow::response(400, R"({"error":"Missing 'q' parameter"})");
+            setSecurityHeaders(response);
+            return response;
+        }
 
-        json searchResult = searchStopsProvider(std::string(query), city ? std::string(city) : "", includeLocation);
+        std::string queryStr(query);
+        if (!isValidSearchQuery(queryStr)) {
+            auto response = crow::response(400, R"({"error":"Invalid search query"})");
+            setSecurityHeaders(response);
+            return response;
+        }
+
+        std::string cityStr = city ? std::string(city) : "";
+        if (!cityStr.empty() && !isValidSearchQuery(cityStr)) {
+            auto response = crow::response(400, R"({"error":"Invalid city parameter"})");
+            setSecurityHeaders(response);
+            return response;
+        }
+
+        json searchResult = searchStopsProvider(queryStr, cityStr, includeLocation);
         bool hasError = searchResult.is_object() && searchResult.contains("error");
         if (!hasError) {
-            ensureStopsInDatabase(searchResult, std::string(query));
+            ensureStopsInDatabase(searchResult, queryStr);
         }
         auto response = crow::response(searchResult.dump());
-        response.set_header("Content-Type", "application/json");
+        setSecurityHeaders(response);
         return response;
 
     });
@@ -764,6 +841,12 @@ int main() {
     // --- Route: Departures ---
     CROW_ROUTE(app, "/api/stops/<string>")
     ([](const crow::request& req, std::string stopId){
+        if (!isValidStopId(stopId)) {
+            auto response = crow::response(400, R"({"error":"Invalid stop ID"})");
+            setSecurityHeaders(response);
+            return response;
+        }
+
         const char* detailedParam = req.url_params.get("detailed");
         const char* delayParam = req.url_params.get("delay");
 
@@ -789,12 +872,19 @@ int main() {
 
         if (!cacheHit) {
             json rawData = fetchDeparturesProvider(stopId);
-            if (rawData.contains("error")) return crow::response(502, rawData.dump());
+            if (rawData.contains("error")) {
+                auto response = crow::response(502, rawData.dump());
+                setSecurityHeaders(response);
+                return response;
+            }
 
             allDepartures = normalizeResponse(rawData, detailed, includeDelay);
 
             std::lock_guard<std::mutex> lock(cache_mutex);
-            stop_cache[cacheKey] = {allDepartures, std::chrono::steady_clock::now()};
+            evictExpiredCacheEntries();
+            if (stop_cache.size() < MAX_CACHE_ENTRIES) {
+                stop_cache[cacheKey] = {allDepartures, std::chrono::steady_clock::now()};
+            }
         }
 
         const char* requestedTrack = req.url_params.get("track");
@@ -818,10 +908,14 @@ int main() {
 
                 if (match) filteredDepartures.push_back(dep);
             }
-            return crow::response(filteredDepartures.dump());
+            auto response = crow::response(filteredDepartures.dump());
+            setSecurityHeaders(response);
+            return response;
         }
 
-        return crow::response(allDepartures.dump());
+        auto response = crow::response(allDepartures.dump());
+        setSecurityHeaders(response);
+        return response;
 });
 
     // --- Route: Current Notifications ---
@@ -830,14 +924,22 @@ int main() {
         auto stopIdParam = req.url_params.get("stopID");
 
         if (!stopIdParam) {
-            return crow::response(400, R"({"error": "Missing 'stopID' parameter"})");
+            auto response = crow::response(400, R"({"error":"Missing 'stopID' parameter"})");
+            setSecurityHeaders(response);
+            return response;
         }
 
         std::string stopId = std::string(stopIdParam);
+        if (!isValidStopId(stopId)) {
+            auto response = crow::response(400, R"({"error":"Invalid stop ID"})");
+            setSecurityHeaders(response);
+            return response;
+        }
+
         json notifications = extractValidNotifications(stopId);
 
         auto response = crow::response(notifications.dump());
-        response.set_header("Content-Type", "application/json");
+        setSecurityHeaders(response);
         return response;
     });
 
