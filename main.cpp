@@ -56,7 +56,7 @@ bool isValidStopId(const std::string& stopId) {
 bool isValidSearchQuery(const std::string& query) {
     if (query.empty() || query.size() > MAX_QUERY_LENGTH) return false;
     for (unsigned char c : query) {
-        if (c < 0x20 && c != '\t') return false;
+        if (c < 0x20 || c == 0x7F) return false;
     }
     return true;
 }
@@ -80,7 +80,6 @@ void setSecurityHeaders(crow::response& res) {
     res.set_header("X-Frame-Options", "DENY");
     res.set_header("Content-Security-Policy", "default-src 'none'");
     res.set_header("Cache-Control", "no-store");
-    res.set_header("X-XSS-Protection", "0");
 }
 
 struct DbConfig {
@@ -797,6 +796,14 @@ int main() {
     if (!db_config) {
         std::cerr << "Database config unavailable. Stop persistence disabled." << std::endl;
     }
+
+    // --- Route: Health Check ---
+    CROW_ROUTE(app, "/health")
+    ([]{
+        auto response = crow::response(200, R"({"status":"ok"})");
+        response.set_header("Content-Type", "application/json");
+        return response;
+    });
 
     // --- Route: Search Stops ---
     CROW_ROUTE(app, "/api/stops/search")

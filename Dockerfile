@@ -64,6 +64,6 @@ USER appuser
 EXPOSE 8080
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD curl -f http://localhost:8080/api/stops/search?q=test || exit 1
+    CMD curl -f http://localhost:8080/health || exit 1
 
 CMD ["./kvv_aggregator"]
