@@ -97,12 +97,20 @@ Retrieve all upcoming departures from a specific stop.
 ### Get Current Notifications
 **`GET /api/current_notifs`**
 
-Retrieve current service notifications and alerts affecting a specific stop. Queries multiple EFA providers and returns only notifications that are currently valid (within their validity time range).
+Retrieve current service notifications and alerts affecting a specific stop. Queries multiple EFA providers and returns only notifications that are currently valid (filtered server-side via `filterValid=1`).
 
 **Query Parameters:**
 - `stopID` (required) - Stop identifier to check for notifications
 
-**Response:** JSON array of notification subtitle strings
+**Response:** JSON array of notification objects
+
+**Response Fields:**
+- `id` - Alert identifier (string)
+- `urlText` - Short URL text description (string)
+- `content` - Full notification content, may include HTML (string)
+- `subtitle` - Notification subtitle (string)
+- `providerCode` - Code of the transit provider (string)
+- `priority` - Notification priority level (string, e.g. `"normal"`, `"high"`)
 
 **Example Request:**
 ```
@@ -111,13 +119,22 @@ GET /api/current_notifs?stopID=7000107
 
 **Example Response:**
 ```json
-["Knielingen - Wörth: nächtliche Einschränkung wegen Bauarbeiten"]
+[
+  {
+    "id": "100003815_KVV_ICSKVV",
+    "urlText": "Knielingen - Wörth: nächtliche Einschränkung wegen Bauarbeiten",
+    "content": "",
+    "subtitle": "Knielingen - Wörth: nächtliche Einschränkung wegen Bauarbeiten",
+    "providerCode": "KVV",
+    "priority": "normal"
+  }
+]
 ```
 
 **Notes:**
 - Queries notifications from multiple EFA providers (efa-bw.de, efa.vrr.de)
-- Filters notifications by current UTC time against validity ranges
-- Returns deduplicated subtitle strings from matching notifications
+- Validity filtering is handled by the upstream API (`filterValid=1`)
+- Returns deduplicated notifications based on alert ID
 - Returns empty array `[]` if no current notifications affect the stop
 
 ---

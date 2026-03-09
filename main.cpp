@@ -730,6 +730,7 @@ json fetchNotificationsFromProvider(const std::string& baseUrl, const std::strin
             {"commonMacro", "addinfo"},
             {"outputFormat", "rapidJSON"},
             {"filterPublished", "1"},
+            {"filterValid", "1"},
             {"filterShowLineList", "0"},
             {"filterShowPlaceList", "0"},
             {"itdLPxx_selStop", stopId}
@@ -751,8 +752,8 @@ json fetchNotificationsFromProvider(const std::string& baseUrl, const std::strin
 // --- Helper: Extract Valid Notifications for a Stop ---
 
 json extractValidNotifications(const std::string& stopId) {
-    json subtitles = json::array();
-    std::set<std::string> seenSubtitles;
+    json notifications = json::array();
+    std::set<std::string> seenIds;
 
     for (const auto& providerUrl : NOTIFICATION_API_PROVIDERS) {
         json response = fetchNotificationsFromProvider(providerUrl, stopId);
@@ -763,28 +764,41 @@ json extractValidNotifications(const std::string& stopId) {
         for (const auto& info : response["infos"]["current"]) {
             if (!isStopAffected(info, stopId)) continue;
 
-            // Skip notifications outside their validity window
-            if (!info.contains("timestamps") || !info["timestamps"].is_object()) continue;
-            if (!info["timestamps"].contains("validity")) continue;
+            std::string alertId = info.contains("id") && info["id"].is_string()
+                ? info["id"].get<std::string>() : "";
 
-            if (!isCurrentlyValid(info["timestamps"]["validity"])) continue;
+            // Skip duplicate alerts across providers
+            if (!alertId.empty() && seenIds.find(alertId) != seenIds.end()) continue;
+            if (!alertId.empty()) seenIds.insert(alertId);
 
-            // Collect unique subtitles from infoLinks
+            std::string priority = info.contains("priority") && info["priority"].is_string()
+                ? info["priority"].get<std::string>() : "";
+
+            std::string providerCode;
+            if (info.contains("properties") && info["properties"].is_object() &&
+                info["properties"].contains("providerCode") && info["properties"]["providerCode"].is_string()) {
+                providerCode = info["properties"]["providerCode"].get<std::string>();
+            }
+
             if (!info.contains("infoLinks") || !info["infoLinks"].is_array()) continue;
 
             for (const auto& link : info["infoLinks"]) {
-                if (link.contains("subtitle") && link["subtitle"].is_string()) {
-                    std::string subtitle = link["subtitle"].get<std::string>();
-                    if (!subtitle.empty() && seenSubtitles.find(subtitle) == seenSubtitles.end()) {
-                        seenSubtitles.insert(subtitle);
-                        subtitles.push_back(subtitle);
-                    }
-                }
+                json notif;
+                notif["id"] = alertId;
+                notif["urlText"] = link.contains("urlText") && link["urlText"].is_string()
+                    ? link["urlText"].get<std::string>() : "";
+                notif["content"] = link.contains("content") && link["content"].is_string()
+                    ? link["content"].get<std::string>() : "";
+                notif["subtitle"] = link.contains("subtitle") && link["subtitle"].is_string()
+                    ? link["subtitle"].get<std::string>() : "";
+                notif["providerCode"] = providerCode;
+                notif["priority"] = priority;
+                notifications.push_back(notif);
             }
         }
     }
 
-    return subtitles;
+    return notifications;
 }
 
 int main() {
