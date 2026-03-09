@@ -1,6 +1,6 @@
 # Transit Tracker API — Developer Integration Guide
 
-> Comprehensive API reference designed for building applications that consume real-time Karlsruhe (KVV) public transit data. This document covers every endpoint, parameter, response field, error condition, and integration pattern.
+> Comprehensive API reference designed for building applications that consume real-time public transit data. This document covers every endpoint, parameter, response field, error condition, and integration pattern.
 
 ## Table of Contents
 
