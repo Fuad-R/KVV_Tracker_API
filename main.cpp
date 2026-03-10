@@ -84,6 +84,8 @@ void setSecurityHeaders(crow::response& res) {
 }
 
 // --- Authentication ---
+// These are initialized once in main() before app.run(), so they are
+// effectively immutable during request handling and safe to read concurrently.
 bool auth_enabled = false;
 std::string api_key;
 
@@ -101,10 +103,20 @@ void initAuth() {
     }
 }
 
+// Constant-time string comparison to prevent timing attacks
+bool constantTimeEquals(const std::string& a, const std::string& b) {
+    if (a.size() != b.size()) return false;
+    volatile unsigned char result = 0;
+    for (size_t i = 0; i < a.size(); ++i) {
+        result |= static_cast<unsigned char>(a[i]) ^ static_cast<unsigned char>(b[i]);
+    }
+    return result == 0;
+}
+
 bool isAuthenticated(const crow::request& req) {
     if (!auth_enabled) return true;
     std::string providedKey = req.get_header_value("X-API-Key");
-    return !providedKey.empty() && providedKey == api_key;
+    return !providedKey.empty() && constantTimeEquals(providedKey, api_key);
 }
 
 crow::response unauthorizedResponse() {
