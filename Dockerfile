@@ -32,12 +32,16 @@ FROM ubuntu:22.04
 ENV DEBIAN_FRONTEND=noninteractive
 
 # Install runtime dependencies
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     libssl3 \
     ca-certificates \
     libpq5 \
     libcurl4 \
+    curl \
     && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user for running the application
+RUN groupadd -r appuser && useradd -r -g appuser -d /app -s /sbin/nologin appuser
 
 WORKDIR /app
 
@@ -46,7 +50,6 @@ COPY --from=builder /app/build/kvv_aggregator .
 
 # Copy installed libraries from builder
 COPY --from=builder /usr/local/lib /usr/local/lib
-COPY --from=builder /usr/local/include /usr/local/include
 
 # Ensure linker can find libs
 RUN echo "/usr/local/lib" > /etc/ld.so.conf.d/local.conf && ldconfig
@@ -54,6 +57,13 @@ RUN echo "/usr/local/lib" > /etc/ld.so.conf.d/local.conf && ldconfig
 # Optional data file
 COPY --from=builder /app/vehicle_types.txt .
 
+# Set ownership and switch to non-root user
+RUN chown -R appuser:appuser /app
+USER appuser
+
 EXPOSE 8080
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD curl -f http://localhost:8080/health || exit 1
 
 CMD ["./kvv_aggregator"]
