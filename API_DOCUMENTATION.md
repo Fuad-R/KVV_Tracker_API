@@ -45,7 +45,7 @@ All endpoints are publicly accessible without API keys or tokens (default behavi
 
 ### When `AUTH=True`
 
-All endpoints require a valid API key. Pass the key via the `X-API-Key` HTTP header:
+All endpoints **except `/health`** require a valid API key. Pass the key via the `X-API-Key` HTTP header:
 
 ```
 X-API-Key: <your-api-key>
@@ -99,12 +99,13 @@ If no database connection is available, the server falls back to comparing the p
 
 ### 1. Health Check
 
-Check whether the API server is running.
+Check whether the API server is running. This endpoint **does not require authentication** even when `AUTH=True`.
 
 | Property | Value |
 |---|---|
 | **URL** | `/health` |
 | **Method** | `GET` |
+| **Auth** | Not required |
 | **Parameters** | None |
 
 #### Response
