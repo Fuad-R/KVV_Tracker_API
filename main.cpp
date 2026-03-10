@@ -94,12 +94,12 @@ std::string sha256Hex(const std::string& input) {
     unsigned char hash[EVP_MAX_MD_SIZE];
     unsigned int hashLen = 0;
     EVP_MD_CTX* ctx = EVP_MD_CTX_new();
-    if (ctx) {
-        EVP_DigestInit_ex(ctx, EVP_sha256(), nullptr);
-        EVP_DigestUpdate(ctx, input.c_str(), input.size());
-        EVP_DigestFinal_ex(ctx, hash, &hashLen);
-        EVP_MD_CTX_free(ctx);
-    }
+    if (!ctx) return "";
+    bool ok = EVP_DigestInit_ex(ctx, EVP_sha256(), nullptr) == 1
+           && EVP_DigestUpdate(ctx, input.c_str(), input.size()) == 1
+           && EVP_DigestFinal_ex(ctx, hash, &hashLen) == 1;
+    EVP_MD_CTX_free(ctx);
+    if (!ok || hashLen == 0) return "";
     std::ostringstream ss;
     for (unsigned int i = 0; i < hashLen; i++) {
         ss << std::hex << std::setfill('0') << std::setw(2) << static_cast<int>(hash[i]);
@@ -224,6 +224,7 @@ bool validateKeyViaDatabase(const std::string& providedKey) {
     if (!db_config) return false;
 
     std::string keyHash = sha256Hex(providedKey);
+    if (keyHash.empty()) return false;
 
     PGconn* conn = connectToDatabase(*db_config);
     if (PQstatus(conn) != CONNECTION_OK) {
@@ -242,11 +243,11 @@ bool validateKeyViaDatabase(const std::string& providedKey) {
     bool valid = (PQresultStatus(res) == PGRES_TUPLES_OK && PQntuples(res) > 0);
 
     if (valid) {
-        std::string id = PQgetvalue(res, 0, 0);
+        std::string keyId = PQgetvalue(res, 0, 0);
         PQclear(res);
 
         const char* updateSql = "UPDATE api_keys SET last_used_at = NOW() WHERE id = $1";
-        const char* updateValues[1] = { id.c_str() };
+        const char* updateValues[1] = { keyId.c_str() };
         PGresult* updateRes = PQexecParams(conn, updateSql, 1, nullptr, updateValues, nullptr, nullptr, 0);
         if (PQresultStatus(updateRes) != PGRES_COMMAND_OK) {
             std::cerr << "Failed to update last_used_at: " << PQerrorMessage(conn) << std::endl;
