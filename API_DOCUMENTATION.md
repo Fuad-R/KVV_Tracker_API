@@ -37,7 +37,40 @@ The API listens on port **8080** by default. Replace `<host>` with the server's 
 
 ## Authentication
 
-**None required.** All endpoints are publicly accessible without API keys or tokens.
+Authentication is **optional** and controlled by the `AUTH` environment variable.
+
+### When `AUTH` is not set or is not `True`
+
+All endpoints are publicly accessible without API keys or tokens (default behavior).
+
+### When `AUTH=True`
+
+All endpoints require a valid API key. Set the `API_KEY` environment variable to define the accepted key.
+
+Pass the key via the `X-API-Key` HTTP header:
+
+```
+X-API-Key: <your-api-key>
+```
+
+**Example:**
+
+```bash
+curl -H "X-API-Key: my-secret-key" http://localhost:8080/api/stops/search?q=Marktplatz
+```
+
+Requests with a missing or invalid API key receive a `401 Unauthorized` response:
+
+```json
+{"error": "Unauthorized. Invalid or missing API key."}
+```
+
+**Environment Variables:**
+
+| Variable  | Description                                      |
+|-----------|--------------------------------------------------|
+| `AUTH`    | Set to `True` to enable API key authentication   |
+| `API_KEY` | The API key that clients must provide             |
 
 ---
 

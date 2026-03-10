@@ -17,6 +17,7 @@
 #include <ctime>
 #include <regex>
 #include <libpq-fe.h>
+#include <cstdlib>
 
 using json = nlohmann::json;
 
@@ -80,6 +81,36 @@ void setSecurityHeaders(crow::response& res) {
     res.set_header("X-Frame-Options", "DENY");
     res.set_header("Content-Security-Policy", "default-src 'none'");
     res.set_header("Cache-Control", "no-store");
+}
+
+// --- Authentication ---
+bool auth_enabled = false;
+std::string api_key;
+
+void initAuth() {
+    const char* authEnv = std::getenv("AUTH");
+    if (authEnv && std::string(authEnv) == "True") {
+        const char* keyEnv = std::getenv("API_KEY");
+        if (keyEnv && std::string(keyEnv).length() > 0) {
+            auth_enabled = true;
+            api_key = std::string(keyEnv);
+            std::cout << "API key authentication enabled." << std::endl;
+        } else {
+            std::cerr << "AUTH=True but API_KEY not set. Authentication disabled." << std::endl;
+        }
+    }
+}
+
+bool isAuthenticated(const crow::request& req) {
+    if (!auth_enabled) return true;
+    std::string providedKey = req.get_header_value("X-API-Key");
+    return !providedKey.empty() && providedKey == api_key;
+}
+
+crow::response unauthorizedResponse() {
+    auto response = crow::response(401, R"({"error":"Unauthorized. Invalid or missing API key."})");
+    setSecurityHeaders(response);
+    return response;
 }
 
 struct DbConfig {
@@ -803,6 +834,7 @@ json extractValidNotifications(const std::string& stopId) {
 
 int main() {
     crow::SimpleApp app;
+    initAuth();
     db_config = loadDbConfig(DB_CONFIG_PATH);
     if (!db_config) {
         db_config = loadDbConfig(DB_CONFIG_CONTAINER_PATH);
@@ -813,7 +845,8 @@ int main() {
 
     // --- Route: Health Check ---
     CROW_ROUTE(app, "/health")
-    ([]{
+    ([](const crow::request& req){
+        if (!isAuthenticated(req)) return unauthorizedResponse();
         auto response = crow::response(200, R"({"status":"ok"})");
         response.set_header("Content-Type", "application/json");
         return response;
@@ -822,6 +855,7 @@ int main() {
     // --- Route: Search Stops ---
     CROW_ROUTE(app, "/api/stops/search")
     ([](const crow::request& req){
+        if (!isAuthenticated(req)) return unauthorizedResponse();
         auto query = req.url_params.get("q");
         auto city = req.url_params.get("city");
         auto locationParam = req.url_params.get("location");
@@ -862,6 +896,7 @@ int main() {
     // --- Route: Departures ---
     CROW_ROUTE(app, "/api/stops/<string>")
     ([](const crow::request& req, std::string stopId){
+        if (!isAuthenticated(req)) return unauthorizedResponse();
         if (!isValidStopId(stopId)) {
             auto response = crow::response(400, R"({"error":"Invalid stop ID"})");
             setSecurityHeaders(response);
@@ -942,6 +977,7 @@ int main() {
     // --- Route: Current Notifications ---
     CROW_ROUTE(app, "/api/current_notifs")
     ([](const crow::request& req){
+        if (!isAuthenticated(req)) return unauthorizedResponse();
         auto stopIdParam = req.url_params.get("stopID");
 
         if (!stopIdParam) {
