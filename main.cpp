@@ -18,6 +18,7 @@
 #include <regex>
 #include <libpq-fe.h>
 #include <cstdlib>
+#include <openssl/evp.h>
 
 using json = nlohmann::json;
 
@@ -89,16 +90,33 @@ void setSecurityHeaders(crow::response& res) {
 bool auth_enabled = false;
 std::string api_key;
 
+std::string sha256Hex(const std::string& input) {
+    unsigned char hash[EVP_MAX_MD_SIZE];
+    unsigned int hashLen = 0;
+    EVP_MD_CTX* ctx = EVP_MD_CTX_new();
+    if (ctx) {
+        EVP_DigestInit_ex(ctx, EVP_sha256(), nullptr);
+        EVP_DigestUpdate(ctx, input.c_str(), input.size());
+        EVP_DigestFinal_ex(ctx, hash, &hashLen);
+        EVP_MD_CTX_free(ctx);
+    }
+    std::ostringstream ss;
+    for (unsigned int i = 0; i < hashLen; i++) {
+        ss << std::hex << std::setfill('0') << std::setw(2) << static_cast<int>(hash[i]);
+    }
+    return ss.str();
+}
+
 void initAuth() {
     const char* authEnv = std::getenv("AUTH");
     if (authEnv && std::string(authEnv) == "True") {
+        auth_enabled = true;
         const char* keyEnv = std::getenv("API_KEY");
         if (keyEnv && std::string(keyEnv).length() > 0) {
-            auth_enabled = true;
             api_key = std::string(keyEnv);
-            std::cout << "API key authentication enabled." << std::endl;
+            std::cout << "API key authentication enabled (env-var fallback available)." << std::endl;
         } else {
-            std::cerr << "AUTH=True but API_KEY not set. Authentication disabled." << std::endl;
+            std::cout << "API key authentication enabled (database mode)." << std::endl;
         }
     }
 }
@@ -111,12 +129,6 @@ bool constantTimeEquals(const std::string& a, const std::string& b) {
         result |= static_cast<unsigned char>(a[i]) ^ static_cast<unsigned char>(b[i]);
     }
     return result == 0;
-}
-
-bool isAuthenticated(const crow::request& req) {
-    if (!auth_enabled) return true;
-    std::string providedKey = req.get_header_value("X-API-Key");
-    return !providedKey.empty() && constantTimeEquals(providedKey, api_key);
 }
 
 crow::response unauthorizedResponse() {
@@ -204,6 +216,66 @@ PGconn* connectToDatabase(const DbConfig& config) {
         nullptr
     };
     return PQconnectdbParams(keywords, values, 0);
+}
+
+// --- Authentication: Database-backed API key validation ---
+
+bool validateKeyViaDatabase(const std::string& providedKey) {
+    if (!db_config) return false;
+
+    std::string keyHash = sha256Hex(providedKey);
+
+    PGconn* conn = connectToDatabase(*db_config);
+    if (PQstatus(conn) != CONNECTION_OK) {
+        std::cerr << "Auth DB connection failed: " << PQerrorMessage(conn) << std::endl;
+        PQfinish(conn);
+        return false;
+    }
+
+    const char* querySql =
+        "SELECT id FROM api_keys "
+        "WHERE key_hash = $1 AND revoked = FALSE "
+        "AND (expires_at IS NULL OR expires_at > NOW())";
+    const char* queryValues[1] = { keyHash.c_str() };
+
+    PGresult* res = PQexecParams(conn, querySql, 1, nullptr, queryValues, nullptr, nullptr, 0);
+    bool valid = (PQresultStatus(res) == PGRES_TUPLES_OK && PQntuples(res) > 0);
+
+    if (valid) {
+        std::string id = PQgetvalue(res, 0, 0);
+        PQclear(res);
+
+        const char* updateSql = "UPDATE api_keys SET last_used_at = NOW() WHERE id = $1";
+        const char* updateValues[1] = { id.c_str() };
+        PGresult* updateRes = PQexecParams(conn, updateSql, 1, nullptr, updateValues, nullptr, nullptr, 0);
+        if (PQresultStatus(updateRes) != PGRES_COMMAND_OK) {
+            std::cerr << "Failed to update last_used_at: " << PQerrorMessage(conn) << std::endl;
+        }
+        PQclear(updateRes);
+    } else {
+        PQclear(res);
+    }
+
+    PQfinish(conn);
+    return valid;
+}
+
+bool isAuthenticated(const crow::request& req) {
+    if (!auth_enabled) return true;
+    std::string providedKey = req.get_header_value("X-API-Key");
+    if (providedKey.empty()) return false;
+
+    // Try database validation first when DB is configured
+    if (db_config) {
+        return validateKeyViaDatabase(providedKey);
+    }
+
+    // Fall back to env-var comparison if no database is configured
+    if (!api_key.empty()) {
+        return constantTimeEquals(providedKey, api_key);
+    }
+
+    return false;
 }
 
 // --- Helper: JSON Conversion Utilities ---

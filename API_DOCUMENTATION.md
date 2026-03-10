@@ -45,9 +45,7 @@ All endpoints are publicly accessible without API keys or tokens (default behavi
 
 ### When `AUTH=True`
 
-All endpoints require a valid API key. Set the `API_KEY` environment variable to define the accepted key.
-
-Pass the key via the `X-API-Key` HTTP header:
+All endpoints require a valid API key. Pass the key via the `X-API-Key` HTTP header:
 
 ```
 X-API-Key: <your-api-key>
@@ -65,12 +63,22 @@ Requests with a missing or invalid API key receive a `401 Unauthorized` response
 {"error": "Unauthorized. Invalid or missing API key."}
 ```
 
+#### Database-backed keys (primary)
+
+When a database connection is configured, API keys are validated against the `api_keys` table. The server computes the SHA-256 hash of the provided key and looks it up via the `key_hash` column. Keys that are revoked or past their `expires_at` timestamp are rejected. On successful authentication the `last_used_at` column is updated.
+
+See the [Database Configuration](#database-configuration) section in the README for the full `api_keys` schema.
+
+#### Environment variable fallback
+
+If no database connection is available, the server falls back to comparing the provided key against the `API_KEY` environment variable.
+
 **Environment Variables:**
 
 | Variable  | Description                                      |
 |-----------|--------------------------------------------------|
 | `AUTH`    | Set to `True` to enable API key authentication   |
-| `API_KEY` | The API key that clients must provide             |
+| `API_KEY` | Fallback API key used when no database is configured |
 
 ---
 

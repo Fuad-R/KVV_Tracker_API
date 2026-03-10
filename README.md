@@ -64,9 +64,16 @@ CREATE TABLE stops (
 );
 
 CREATE TABLE api_keys (
-   key TEXT PRIMARY KEY,
-   description TEXT,
-   created TIMESTAMPTZ DEFAULT NOW()
+   id SERIAL PRIMARY KEY,
+   user_id INTEGER NOT NULL,
+   key_hash TEXT NOT NULL,
+   key_prefix TEXT NOT NULL,
+   name TEXT NOT NULL,
+   scopes TEXT[] DEFAULT '{}',
+   created_at TIMESTAMPTZ DEFAULT NOW(),
+   expires_at TIMESTAMPTZ,
+   revoked BOOLEAN DEFAULT FALSE,
+   last_used_at TIMESTAMPTZ
 );
 ```
 
