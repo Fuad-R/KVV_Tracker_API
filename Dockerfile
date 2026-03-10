@@ -20,11 +20,12 @@ WORKDIR /app
 # Copy only CMakeLists.txt first to fetch and build dependencies (cached layer)
 COPY CMakeLists.txt .
 
-# Create a dummy main.cpp so cmake configure + dependency fetch succeeds
+# Create a minimal main.cpp stub so cmake can configure and build all dependencies.
+# Only CMakeLists.txt has been copied at this point, so no real source exists yet.
 RUN mkdir build && cd build && \
     echo "int main(){return 0;}" > ../main.cpp && \
     cmake .. -DCMAKE_BUILD_TYPE=Release && \
-    make -j$(nproc) || true
+    make -j$(nproc)
 
 # Now copy the real source files
 COPY main.cpp .
