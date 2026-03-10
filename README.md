@@ -50,7 +50,7 @@ In Docker, mount the file to `/config/db_connection.txt` to use the container pa
 If the file is missing or incomplete, stop searches still respond, but no stops are persisted.
 
 The database must include the following schema:
-```
+```sql
 CREATE TABLE stops (
    stop_id TEXT PRIMARY KEY,
    local_id TEXT,
@@ -61,6 +61,12 @@ CREATE TABLE stops (
    original_search TEXT,
    created TIMESTAMPTZ DEFAULT NOW(),
    last_updated TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE api_keys (
+   key TEXT PRIMARY KEY,
+   description TEXT,
+   created TIMESTAMPTZ DEFAULT NOW()
 );
 ```
 
