@@ -19,6 +19,7 @@ FetchContent_Declare(
         asio
         GIT_REPOSITORY https://github.com/chriskohlhoff/asio.git
         GIT_TAG asio-1-30-2
+        GIT_SHALLOW TRUE
 )
 FetchContent_MakeAvailable(asio)
 
@@ -34,6 +35,7 @@ FetchContent_Declare(
         Crow
         GIT_REPOSITORY https://github.com/CrowCpp/Crow.git
         GIT_TAG v1.2.0
+        GIT_SHALLOW TRUE
 )
 set(CROW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(CROW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
@@ -47,6 +49,7 @@ FetchContent_Declare(
         json
         GIT_REPOSITORY https://github.com/nlohmann/json.git
         GIT_TAG v3.11.3  # BUMPED VERSION to fix CMake < 3.5 error
+        GIT_SHALLOW TRUE
 )
 # Option to skip JSON's internal CMake setup if it continues to fail
 set(JSON_BuildTests OFF CACHE BOOL "" FORCE)
@@ -59,6 +62,7 @@ FetchContent_Declare(
         cpr
         GIT_REPOSITORY https://github.com/libcpr/cpr.git
         GIT_TAG 1.10.5
+        GIT_SHALLOW TRUE
 )
 set(CPR_USE_SYSTEM_CURL ON CACHE BOOL "" FORCE)
 set(BUILD_CPR_TESTS OFF CACHE BOOL "" FORCE)

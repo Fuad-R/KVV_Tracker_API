@@ -17,11 +17,21 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-# Copy source
-COPY . .
+# Copy only CMakeLists.txt first to fetch and build dependencies (cached layer)
+COPY CMakeLists.txt .
 
-# Build project + install libraries into /usr/local
+# Create a dummy main.cpp so cmake configure + dependency fetch succeeds
 RUN mkdir build && cd build && \
+    echo "int main(){return 0;}" > ../main.cpp && \
+    cmake .. -DCMAKE_BUILD_TYPE=Release && \
+    make -j$(nproc) || true
+
+# Now copy the real source files
+COPY main.cpp .
+COPY vehicle_types.txt .
+
+# Rebuild with real source (dependencies are already built and cached)
+RUN cd build && \
     cmake .. -DCMAKE_BUILD_TYPE=Release && \
     make -j$(nproc) && \
     make install

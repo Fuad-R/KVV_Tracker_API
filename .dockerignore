@@ -1,0 +1,45 @@
+# Version control
+.git
+.gitignore
+
+# IDE files
+.idea
+*.iws
+*.iml
+*.ipr
+
+# Build artifacts
+build/
+cmake-build-*/
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+_deps/
+
+# Compiled objects
+*.o
+*.out
+*.a
+
+# Environment and secrets
+.env
+*.env
+.env.*
+!.env.example
+
+# Documentation (not needed in image)
+*.md
+
+# Example/template files
+*.example
+
+# OS files
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Temporary files
+*.tmp
+*.bak
+*~
+*.log
