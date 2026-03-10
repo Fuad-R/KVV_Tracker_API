@@ -90,6 +90,12 @@ void setSecurityHeaders(crow::response& res) {
 bool auth_enabled = false;
 std::string api_key;
 
+// Persistent auth DB connection and throttle state (protected by auth_db_mutex)
+std::mutex auth_db_mutex;
+PGconn* auth_db_conn = nullptr;
+std::map<std::string, std::chrono::steady_clock::time_point> last_used_updates;
+const int LAST_USED_UPDATE_INTERVAL_SECONDS = 300; // 5 minutes
+
 std::string sha256Hex(const std::string& input) {
     unsigned char hash[EVP_MAX_MD_SIZE];
     unsigned int hashLen = 0;
@@ -218,6 +224,30 @@ PGconn* connectToDatabase(const DbConfig& config) {
     return PQconnectdbParams(keywords, values, 0);
 }
 
+// --- Authentication: Persistent auth DB connection management ---
+
+PGconn* getAuthDbConnection() {
+    // Must be called with auth_db_mutex held
+    if (auth_db_conn && PQstatus(auth_db_conn) == CONNECTION_OK) {
+        return auth_db_conn;
+    }
+    // Clean up stale connection
+    if (auth_db_conn) {
+        PQfinish(auth_db_conn);
+        auth_db_conn = nullptr;
+    }
+    if (!db_config) return nullptr;
+    auth_db_conn = connectToDatabase(*db_config);
+    if (!auth_db_conn) return nullptr;
+    if (PQstatus(auth_db_conn) != CONNECTION_OK) {
+        std::cerr << "Auth DB connection failed: " << PQerrorMessage(auth_db_conn) << std::endl;
+        PQfinish(auth_db_conn);
+        auth_db_conn = nullptr;
+        return nullptr;
+    }
+    return auth_db_conn;
+}
+
 // --- Authentication: Database-backed API key validation ---
 
 bool validateKeyViaDatabase(const std::string& providedKey) {
@@ -226,12 +256,10 @@ bool validateKeyViaDatabase(const std::string& providedKey) {
     std::string keyHash = sha256Hex(providedKey);
     if (keyHash.empty()) return false;
 
-    PGconn* conn = connectToDatabase(*db_config);
-    if (PQstatus(conn) != CONNECTION_OK) {
-        std::cerr << "Auth DB connection failed: " << PQerrorMessage(conn) << std::endl;
-        PQfinish(conn);
-        return false;
-    }
+    std::lock_guard<std::mutex> lock(auth_db_mutex);
+
+    PGconn* conn = getAuthDbConnection();
+    if (!conn) return false;
 
     const char* querySql =
         "SELECT id FROM api_keys "
@@ -240,24 +268,37 @@ bool validateKeyViaDatabase(const std::string& providedKey) {
     const char* queryValues[1] = { keyHash.c_str() };
 
     PGresult* res = PQexecParams(conn, querySql, 1, nullptr, queryValues, nullptr, nullptr, 0);
+    if (!res) {
+        std::cerr << "Auth query returned null result" << std::endl;
+        return false;
+    }
     bool valid = (PQresultStatus(res) == PGRES_TUPLES_OK && PQntuples(res) > 0);
 
     if (valid) {
         std::string keyId = PQgetvalue(res, 0, 0);
         PQclear(res);
 
-        const char* updateSql = "UPDATE api_keys SET last_used_at = NOW() WHERE id = $1";
-        const char* updateValues[1] = { keyId.c_str() };
-        PGresult* updateRes = PQexecParams(conn, updateSql, 1, nullptr, updateValues, nullptr, nullptr, 0);
-        if (PQresultStatus(updateRes) != PGRES_COMMAND_OK) {
-            std::cerr << "Failed to update last_used_at: " << PQerrorMessage(conn) << std::endl;
+        // Throttle last_used_at updates: only once per LAST_USED_UPDATE_INTERVAL_SECONDS per key
+        auto now = std::chrono::steady_clock::now();
+        auto it = last_used_updates.find(keyId);
+        bool shouldUpdate = (it == last_used_updates.end()) ||
+            (std::chrono::duration_cast<std::chrono::seconds>(now - it->second).count() >= LAST_USED_UPDATE_INTERVAL_SECONDS);
+
+        if (shouldUpdate) {
+            const char* updateSql = "UPDATE api_keys SET last_used_at = NOW() WHERE id = $1";
+            const char* updateValues[1] = { keyId.c_str() };
+            PGresult* updateRes = PQexecParams(conn, updateSql, 1, nullptr, updateValues, nullptr, nullptr, 0);
+            if (!updateRes || PQresultStatus(updateRes) != PGRES_COMMAND_OK) {
+                std::cerr << "Failed to update last_used_at: " << PQerrorMessage(conn) << std::endl;
+            } else {
+                last_used_updates[keyId] = now;
+            }
+            if (updateRes) PQclear(updateRes);
         }
-        PQclear(updateRes);
     } else {
         PQclear(res);
     }
 
-    PQfinish(conn);
     return valid;
 }
 
