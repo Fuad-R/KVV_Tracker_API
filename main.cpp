@@ -115,14 +115,19 @@ std::string sha256Hex(const std::string& input) {
 
 void initAuth() {
     const char* authEnv = std::getenv("AUTH");
-    if (authEnv && std::string(authEnv) == "True") {
-        auth_enabled = true;
-        const char* keyEnv = std::getenv("API_KEY");
-        if (keyEnv && std::string(keyEnv).length() > 0) {
-            api_key = std::string(keyEnv);
-            std::cout << "API key authentication enabled (env-var fallback available)." << std::endl;
-        } else {
-            std::cout << "API key authentication enabled (database mode)." << std::endl;
+    if (authEnv) {
+        std::string authVal(authEnv);
+        std::transform(authVal.begin(), authVal.end(), authVal.begin(),
+                       [](unsigned char c){ return std::tolower(c); });
+        if (authVal == "true" || authVal == "1" || authVal == "yes") {
+            auth_enabled = true;
+            const char* keyEnv = std::getenv("API_KEY");
+            if (keyEnv && std::string(keyEnv).length() > 0) {
+                api_key = std::string(keyEnv);
+                std::cout << "API key authentication enabled (env-var fallback available)." << std::endl;
+            } else {
+                std::cout << "API key authentication enabled (database mode)." << std::endl;
+            }
         }
     }
 }
@@ -591,6 +596,10 @@ void ensureStopsInDatabase(const json& searchResult, const std::string& original
     if (records.empty()) return;
 
     PGconn* conn = connectToDatabase(*db_config);
+    if (!conn) {
+        std::cerr << "Database connection returned null" << std::endl;
+        return;
+    }
     if (PQstatus(conn) != CONNECTION_OK) {
         std::cerr << "Database connection failed: " << PQerrorMessage(conn) << std::endl;
         PQfinish(conn);
@@ -624,6 +633,11 @@ void ensureStopsInDatabase(const json& searchResult, const std::string& original
         values[7] = originalSearch.empty() ? nullptr : originalSearch.c_str();
 
         PGresult* res = PQexecParams(conn, insertSql, 8, nullptr, values, nullptr, nullptr, 0);
+        if (!res) {
+            std::cerr << "Failed to execute insert for stop " << record.stop_id
+                      << ": PQexecParams returned null" << std::endl;
+            continue;
+        }
         if (PQresultStatus(res) != PGRES_COMMAND_OK) {
             std::cerr << "Failed to insert stop " << record.stop_id << ": "
                       << PQerrorMessage(conn) << std::endl;
