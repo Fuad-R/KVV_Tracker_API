@@ -94,7 +94,7 @@ std::string api_key;
 std::mutex auth_db_mutex;
 PGconn* auth_db_conn = nullptr;
 std::map<std::string, std::chrono::steady_clock::time_point> last_used_updates;
-const int LAST_USED_UPDATE_INTERVAL_SECONDS = 300; // 5 minutes
+constexpr int LAST_USED_UPDATE_INTERVAL_SECONDS = 300; // 5 minutes
 
 std::string sha256Hex(const std::string& input) {
     unsigned char hash[EVP_MAX_MD_SIZE];
@@ -257,6 +257,16 @@ bool validateKeyViaDatabase(const std::string& providedKey) {
     if (keyHash.empty()) return false;
 
     std::lock_guard<std::mutex> lock(auth_db_mutex);
+
+    // Purge stale entries from the throttle map to prevent unbounded growth
+    auto now = std::chrono::steady_clock::now();
+    for (auto it = last_used_updates.begin(); it != last_used_updates.end(); ) {
+        if (std::chrono::duration_cast<std::chrono::seconds>(now - it->second).count() >= LAST_USED_UPDATE_INTERVAL_SECONDS) {
+            it = last_used_updates.erase(it);
+        } else {
+            ++it;
+        }
+    }
 
     PGconn* conn = getAuthDbConnection();
     if (!conn) return false;
