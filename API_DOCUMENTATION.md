@@ -370,7 +370,7 @@ Find transit stops near a geographic location. Returns stops from the database o
 |---|---|---|---|---|
 | `lat` | **Yes** | number | — | Latitude of the center point. Must be between -90 and 90. |
 | `lon` | **Yes** | number | — | Longitude of the center point. Must be between -180 and 180. |
-| `radius` | No | number | `1000` | Search radius in meters. Must be between 0 (exclusive) and 50000. |
+| `radius` | No | number | `1000` | Search radius in meters. Must be greater than 0 and at most 50000. |
 | `limit` | No | integer | `10` | Maximum number of stops to return. Must be between 1 and 100. |
 
 #### Response
@@ -426,7 +426,7 @@ GET /api/stops/nearby?lat=49.0094&lon=8.4044&radius=500&limit=5
 | `400` | `{"error": "Invalid 'lat' or 'lon' value"}` | `lat` or `lon` is not a valid number. |
 | `400` | `{"error": "'lat' must be between -90 and 90, 'lon' must be between -180 and 180"}` | Coordinates are out of valid range. |
 | `400` | `{"error": "Invalid 'radius' value"}` | `radius` is not a valid number. |
-| `400` | `{"error": "'radius' must be between 0 and 50000 meters"}` | Radius is out of valid range. |
+| `400` | `{"error": "'radius' must be greater than 0 and at most 50000 meters"}` | Radius is out of valid range. |
 | `400` | `{"error": "Invalid 'limit' value"}` | `limit` is not a valid integer. |
 | `400` | `{"error": "'limit' must be between 1 and 100"}` | Limit is out of valid range. |
 | `503` | `{"error": "Database not configured"}` | No database connection is configured. |
@@ -497,7 +497,7 @@ All error responses follow this structure:
 - **Stop IDs** must be 1–100 characters, matching the pattern `^[a-zA-Z0-9:_. -]+$`.
 - **Search queries** must be 1–200 characters with no ASCII control characters (0x00–0x1F, 0x7F).
 - **Coordinates** (`lat`, `lon`) must be valid numbers within geographic bounds (latitude: -90 to 90, longitude: -180 to 180).
-- **Radius** must be a positive number up to 50,000 meters.
+- **Radius** must be greater than 0 and at most 50,000 meters.
 - **Limit** must be an integer between 1 and 100.
 - Requests with invalid input are rejected with `400` before any upstream call is made.
 

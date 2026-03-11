@@ -1191,7 +1191,7 @@ int main() {
                 return response;
             }
             if (radius <= 0 || radius > 50000) {
-                auto response = crow::response(400, R"({"error":"'radius' must be between 0 and 50000 meters"})");
+                auto response = crow::response(400, R"({"error":"'radius' must be greater than 0 and at most 50000 meters"})");
                 setSecurityHeaders(response);
                 return response;
             }
