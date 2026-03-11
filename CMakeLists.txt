@@ -70,6 +70,11 @@ FetchContent_MakeAvailable(cpr)
 find_package(PostgreSQL REQUIRED)
 
 # ------------------------------------------------------------------------------
+# 5b. OpenSSL (for SHA-256 API key hashing)
+# ------------------------------------------------------------------------------
+find_package(OpenSSL REQUIRED)
+
+# ------------------------------------------------------------------------------
 # 6. Build Target
 # ------------------------------------------------------------------------------
 add_executable(kvv_aggregator main.cpp)
@@ -79,4 +84,5 @@ target_link_libraries(kvv_aggregator PRIVATE
         nlohmann_json::nlohmann_json
         cpr::cpr
         PostgreSQL::PostgreSQL
+        OpenSSL::Crypto
 )

@@ -17,6 +17,8 @@
 #include <ctime>
 #include <regex>
 #include <libpq-fe.h>
+#include <cstdlib>
+#include <openssl/evp.h>
 
 using json = nlohmann::json;
 
@@ -80,6 +82,70 @@ void setSecurityHeaders(crow::response& res) {
     res.set_header("X-Frame-Options", "DENY");
     res.set_header("Content-Security-Policy", "default-src 'none'");
     res.set_header("Cache-Control", "no-store");
+}
+
+// --- Authentication ---
+// These are initialized once in main() before app.run(), so they are
+// effectively immutable during request handling and safe to read concurrently.
+bool auth_enabled = false;
+std::string api_key;
+
+// Persistent auth DB connection and throttle state (protected by auth_db_mutex)
+std::mutex auth_db_mutex;
+PGconn* auth_db_conn = nullptr;
+std::map<std::string, std::chrono::steady_clock::time_point> last_used_updates;
+constexpr int LAST_USED_UPDATE_INTERVAL_SECONDS = 300; // 5 minutes
+
+std::string sha256Hex(const std::string& input) {
+    unsigned char hash[EVP_MAX_MD_SIZE];
+    unsigned int hashLen = 0;
+    EVP_MD_CTX* ctx = EVP_MD_CTX_new();
+    if (!ctx) return "";
+    bool ok = EVP_DigestInit_ex(ctx, EVP_sha256(), nullptr) == 1
+           && EVP_DigestUpdate(ctx, input.c_str(), input.size()) == 1
+           && EVP_DigestFinal_ex(ctx, hash, &hashLen) == 1;
+    EVP_MD_CTX_free(ctx);
+    if (!ok || hashLen == 0) return "";
+    std::ostringstream ss;
+    for (unsigned int i = 0; i < hashLen; i++) {
+        ss << std::hex << std::setfill('0') << std::setw(2) << static_cast<int>(hash[i]);
+    }
+    return ss.str();
+}
+
+void initAuth() {
+    const char* authEnv = std::getenv("AUTH");
+    if (authEnv) {
+        std::string authVal(authEnv);
+        std::transform(authVal.begin(), authVal.end(), authVal.begin(),
+                       [](unsigned char c){ return std::tolower(c); });
+        if (authVal == "true" || authVal == "1" || authVal == "yes") {
+            auth_enabled = true;
+            const char* keyEnv = std::getenv("API_KEY");
+            if (keyEnv && std::string(keyEnv).length() > 0) {
+                api_key = std::string(keyEnv);
+                std::cout << "API key authentication enabled (env-var fallback available)." << std::endl;
+            } else {
+                std::cout << "API key authentication enabled (database mode)." << std::endl;
+            }
+        }
+    }
+}
+
+// Constant-time string comparison to prevent timing attacks
+bool constantTimeEquals(const std::string& a, const std::string& b) {
+    if (a.size() != b.size()) return false;
+    volatile unsigned char result = 0;
+    for (size_t i = 0; i < a.size(); ++i) {
+        result |= static_cast<unsigned char>(a[i]) ^ static_cast<unsigned char>(b[i]);
+    }
+    return result == 0;
+}
+
+crow::response unauthorizedResponse() {
+    auto response = crow::response(401, R"({"error":"Unauthorized. Invalid or missing API key."})");
+    setSecurityHeaders(response);
+    return response;
 }
 
 struct DbConfig {
@@ -161,6 +227,112 @@ PGconn* connectToDatabase(const DbConfig& config) {
         nullptr
     };
     return PQconnectdbParams(keywords, values, 0);
+}
+
+// --- Authentication: Persistent auth DB connection management ---
+
+PGconn* getAuthDbConnection() {
+    // Must be called with auth_db_mutex held
+    if (auth_db_conn && PQstatus(auth_db_conn) == CONNECTION_OK) {
+        return auth_db_conn;
+    }
+    // Clean up stale connection
+    if (auth_db_conn) {
+        PQfinish(auth_db_conn);
+        auth_db_conn = nullptr;
+    }
+    if (!db_config) return nullptr;
+    auth_db_conn = connectToDatabase(*db_config);
+    if (!auth_db_conn) return nullptr;
+    if (PQstatus(auth_db_conn) != CONNECTION_OK) {
+        std::cerr << "Auth DB connection failed: " << PQerrorMessage(auth_db_conn) << std::endl;
+        PQfinish(auth_db_conn);
+        auth_db_conn = nullptr;
+        return nullptr;
+    }
+    return auth_db_conn;
+}
+
+// --- Authentication: Database-backed API key validation ---
+
+bool validateKeyViaDatabase(const std::string& providedKey) {
+    if (!db_config) return false;
+
+    std::string keyHash = sha256Hex(providedKey);
+    if (keyHash.empty()) return false;
+
+    std::lock_guard<std::mutex> lock(auth_db_mutex);
+
+    // Purge stale entries from the throttle map to prevent unbounded growth
+    auto now = std::chrono::steady_clock::now();
+    for (auto it = last_used_updates.begin(); it != last_used_updates.end(); ) {
+        if (std::chrono::duration_cast<std::chrono::seconds>(now - it->second).count() >= LAST_USED_UPDATE_INTERVAL_SECONDS) {
+            it = last_used_updates.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
+    PGconn* conn = getAuthDbConnection();
+    if (!conn) return false;
+
+    const char* querySql =
+        "SELECT id FROM api_keys "
+        "WHERE key_hash = $1 AND revoked = FALSE "
+        "AND (expires_at IS NULL OR expires_at > NOW())";
+    const char* queryValues[1] = { keyHash.c_str() };
+
+    PGresult* res = PQexecParams(conn, querySql, 1, nullptr, queryValues, nullptr, nullptr, 0);
+    if (!res) {
+        std::cerr << "Auth query returned null result" << std::endl;
+        return false;
+    }
+    bool valid = (PQresultStatus(res) == PGRES_TUPLES_OK && PQntuples(res) > 0);
+
+    if (valid) {
+        std::string keyId = PQgetvalue(res, 0, 0);
+        PQclear(res);
+
+        // Throttle last_used_at updates: only once per LAST_USED_UPDATE_INTERVAL_SECONDS per key
+        auto now = std::chrono::steady_clock::now();
+        auto it = last_used_updates.find(keyId);
+        bool shouldUpdate = (it == last_used_updates.end()) ||
+            (std::chrono::duration_cast<std::chrono::seconds>(now - it->second).count() >= LAST_USED_UPDATE_INTERVAL_SECONDS);
+
+        if (shouldUpdate) {
+            const char* updateSql = "UPDATE api_keys SET last_used_at = NOW() WHERE id = $1";
+            const char* updateValues[1] = { keyId.c_str() };
+            PGresult* updateRes = PQexecParams(conn, updateSql, 1, nullptr, updateValues, nullptr, nullptr, 0);
+            if (!updateRes || PQresultStatus(updateRes) != PGRES_COMMAND_OK) {
+                std::cerr << "Failed to update last_used_at: " << PQerrorMessage(conn) << std::endl;
+            } else {
+                last_used_updates[keyId] = now;
+            }
+            if (updateRes) PQclear(updateRes);
+        }
+    } else {
+        PQclear(res);
+    }
+
+    return valid;
+}
+
+bool isAuthenticated(const crow::request& req) {
+    if (!auth_enabled) return true;
+    std::string providedKey = req.get_header_value("X-API-Key");
+    if (providedKey.empty()) return false;
+
+    // Try database validation first when DB is configured
+    if (db_config) {
+        return validateKeyViaDatabase(providedKey);
+    }
+
+    // Fall back to env-var comparison if no database is configured
+    if (!api_key.empty()) {
+        return constantTimeEquals(providedKey, api_key);
+    }
+
+    return false;
 }
 
 // --- Helper: JSON Conversion Utilities ---
@@ -424,6 +596,10 @@ void ensureStopsInDatabase(const json& searchResult, const std::string& original
     if (records.empty()) return;
 
     PGconn* conn = connectToDatabase(*db_config);
+    if (!conn) {
+        std::cerr << "Database connection returned null" << std::endl;
+        return;
+    }
     if (PQstatus(conn) != CONNECTION_OK) {
         std::cerr << "Database connection failed: " << PQerrorMessage(conn) << std::endl;
         PQfinish(conn);
@@ -457,6 +633,11 @@ void ensureStopsInDatabase(const json& searchResult, const std::string& original
         values[7] = originalSearch.empty() ? nullptr : originalSearch.c_str();
 
         PGresult* res = PQexecParams(conn, insertSql, 8, nullptr, values, nullptr, nullptr, 0);
+        if (!res) {
+            std::cerr << "Failed to execute insert for stop " << record.stop_id
+                      << ": PQexecParams returned null" << std::endl;
+            continue;
+        }
         if (PQresultStatus(res) != PGRES_COMMAND_OK) {
             std::cerr << "Failed to insert stop " << record.stop_id << ": "
                       << PQerrorMessage(conn) << std::endl;
@@ -803,6 +984,7 @@ json extractValidNotifications(const std::string& stopId) {
 
 int main() {
     crow::SimpleApp app;
+    initAuth();
     db_config = loadDbConfig(DB_CONFIG_PATH);
     if (!db_config) {
         db_config = loadDbConfig(DB_CONFIG_CONTAINER_PATH);
@@ -811,9 +993,9 @@ int main() {
         std::cerr << "Database config unavailable. Stop persistence disabled." << std::endl;
     }
 
-    // --- Route: Health Check ---
+    // --- Route: Health Check (no authentication required) ---
     CROW_ROUTE(app, "/health")
-    ([]{
+    ([](const crow::request& /*req*/){
         auto response = crow::response(200, R"({"status":"ok"})");
         response.set_header("Content-Type", "application/json");
         return response;
@@ -822,6 +1004,7 @@ int main() {
     // --- Route: Search Stops ---
     CROW_ROUTE(app, "/api/stops/search")
     ([](const crow::request& req){
+        if (!isAuthenticated(req)) return unauthorizedResponse();
         auto query = req.url_params.get("q");
         auto city = req.url_params.get("city");
         auto locationParam = req.url_params.get("location");
@@ -862,6 +1045,7 @@ int main() {
     // --- Route: Departures ---
     CROW_ROUTE(app, "/api/stops/<string>")
     ([](const crow::request& req, std::string stopId){
+        if (!isAuthenticated(req)) return unauthorizedResponse();
         if (!isValidStopId(stopId)) {
             auto response = crow::response(400, R"({"error":"Invalid stop ID"})");
             setSecurityHeaders(response);
@@ -942,6 +1126,7 @@ int main() {
     // --- Route: Current Notifications ---
     CROW_ROUTE(app, "/api/current_notifs")
     ([](const crow::request& req){
+        if (!isAuthenticated(req)) return unauthorizedResponse();
         auto stopIdParam = req.url_params.get("stopID");
 
         if (!stopIdParam) {

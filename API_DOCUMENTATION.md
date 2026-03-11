@@ -37,7 +37,48 @@ The API listens on port **8080** by default. Replace `<host>` with the server's 
 
 ## Authentication
 
-**None required.** All endpoints are publicly accessible without API keys or tokens.
+Authentication is **optional** and controlled by the `AUTH` environment variable.
+
+### When `AUTH` is not set or is not `True`
+
+All endpoints are publicly accessible without API keys or tokens (default behavior).
+
+### When `AUTH=True`
+
+All endpoints **except `/health`** require a valid API key. Pass the key via the `X-API-Key` HTTP header:
+
+```
+X-API-Key: <your-api-key>
+```
+
+**Example:**
+
+```bash
+curl -H "X-API-Key: my-secret-key" http://localhost:8080/api/stops/search?q=Marktplatz
+```
+
+Requests with a missing or invalid API key receive a `401 Unauthorized` response:
+
+```json
+{"error": "Unauthorized. Invalid or missing API key."}
+```
+
+#### Database-backed keys (primary)
+
+When a database connection is configured, API keys are validated against the `api_keys` table. The server computes the SHA-256 hash of the provided key and looks it up via the `key_hash` column. Keys that are revoked or past their `expires_at` timestamp are rejected. On successful authentication the `last_used_at` column is updated.
+
+See the [Database Configuration](#database-configuration) section in the README for the full `api_keys` schema.
+
+#### Environment variable fallback
+
+If no database connection is available, the server falls back to comparing the provided key against the `API_KEY` environment variable.
+
+**Environment Variables:**
+
+| Variable  | Description                                      |
+|-----------|--------------------------------------------------|
+| `AUTH`    | Set to `True` to enable API key authentication   |
+| `API_KEY` | Fallback API key used when no database is configured |
 
 ---
 
@@ -58,12 +99,13 @@ The API listens on port **8080** by default. Replace `<host>` with the server's 
 
 ### 1. Health Check
 
-Check whether the API server is running.
+Check whether the API server is running. This endpoint **does not require authentication** even when `AUTH=True`.
 
 | Property | Value |
 |---|---|
 | **URL** | `/health` |
 | **Method** | `GET` |
+| **Auth** | Not required |
 | **Parameters** | None |
 
 #### Response
