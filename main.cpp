@@ -1149,5 +1149,139 @@ int main() {
         return response;
     });
 
+    // --- Route: Nearby Stops ---
+    CROW_ROUTE(app, "/api/stops/nearby")
+    ([](const crow::request& req){
+        if (!isAuthenticated(req)) return unauthorizedResponse();
+
+        auto latParam = req.url_params.get("lat");
+        auto lonParam = req.url_params.get("lon");
+        auto radiusParam = req.url_params.get("radius");
+        auto limitParam = req.url_params.get("limit");
+
+        if (!latParam || !lonParam) {
+            auto response = crow::response(400, R"({"error":"Missing 'lat' and/or 'lon' parameter"})");
+            setSecurityHeaders(response);
+            return response;
+        }
+
+        double lat, lon;
+        try {
+            lat = std::stod(std::string(latParam));
+            lon = std::stod(std::string(lonParam));
+        } catch (...) {
+            auto response = crow::response(400, R"({"error":"Invalid 'lat' or 'lon' value"})");
+            setSecurityHeaders(response);
+            return response;
+        }
+
+        if (lat < -90.0 || lat > 90.0 || lon < -180.0 || lon > 180.0) {
+            auto response = crow::response(400, R"({"error":"'lat' must be between -90 and 90, 'lon' must be between -180 and 180"})");
+            setSecurityHeaders(response);
+            return response;
+        }
+
+        double radius = 1000.0; // default 1000 meters
+        if (radiusParam) {
+            try {
+                radius = std::stod(std::string(radiusParam));
+            } catch (...) {
+                auto response = crow::response(400, R"({"error":"Invalid 'radius' value"})");
+                setSecurityHeaders(response);
+                return response;
+            }
+            if (radius <= 0 || radius > 50000) {
+                auto response = crow::response(400, R"({"error":"'radius' must be between 0 and 50000 meters"})");
+                setSecurityHeaders(response);
+                return response;
+            }
+        }
+
+        int limit = 10; // default 10 results
+        if (limitParam) {
+            try {
+                limit = std::stoi(std::string(limitParam));
+            } catch (...) {
+                auto response = crow::response(400, R"({"error":"Invalid 'limit' value"})");
+                setSecurityHeaders(response);
+                return response;
+            }
+            if (limit < 1 || limit > 100) {
+                auto response = crow::response(400, R"({"error":"'limit' must be between 1 and 100"})");
+                setSecurityHeaders(response);
+                return response;
+            }
+        }
+
+        if (!db_config) {
+            auto response = crow::response(503, R"({"error":"Database not configured"})");
+            setSecurityHeaders(response);
+            return response;
+        }
+
+        PGconn* conn = connectToDatabase(*db_config);
+        if (!conn || PQstatus(conn) != CONNECTION_OK) {
+            if (conn) PQfinish(conn);
+            auto response = crow::response(503, R"({"error":"Database connection failed"})");
+            setSecurityHeaders(response);
+            return response;
+        }
+
+        const char* sql =
+            "SELECT stop_id, local_id, stop_name, city, "
+            "ST_Y(location::geometry) AS latitude, "
+            "ST_X(location::geometry) AS longitude, "
+            "ST_Distance(location, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography) AS distance "
+            "FROM stops "
+            "WHERE ST_DWithin(location, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography, $3) "
+            "ORDER BY distance ASC "
+            "LIMIT $4;";
+
+        std::string lonText = formatDouble(lon);
+        std::string latText = formatDouble(lat);
+        std::string radiusText = formatDouble(radius);
+        std::string limitText = std::to_string(limit);
+
+        const char* values[4] = { lonText.c_str(), latText.c_str(), radiusText.c_str(), limitText.c_str() };
+
+        PGresult* res = PQexecParams(conn, sql, 4, nullptr, values, nullptr, nullptr, 0);
+        if (!res || PQresultStatus(res) != PGRES_TUPLES_OK) {
+            std::cerr << "Nearby stops query failed: " << PQerrorMessage(conn) << std::endl;
+            if (res) PQclear(res);
+            PQfinish(conn);
+            auto response = crow::response(500, R"({"error":"Database query failed"})");
+            setSecurityHeaders(response);
+            return response;
+        }
+
+        json result = json::array();
+        int nRows = PQntuples(res);
+        for (int i = 0; i < nRows; ++i) {
+            json stop;
+            stop["stop_id"] = PQgetisnull(res, i, 0) ? "" : PQgetvalue(res, i, 0);
+            stop["local_id"] = PQgetisnull(res, i, 1) ? nullptr : json(PQgetvalue(res, i, 1));
+            stop["stop_name"] = PQgetisnull(res, i, 2) ? "" : PQgetvalue(res, i, 2);
+            stop["city"] = PQgetisnull(res, i, 3) ? nullptr : json(PQgetvalue(res, i, 3));
+
+            if (!PQgetisnull(res, i, 4) && !PQgetisnull(res, i, 5)) {
+                stop["latitude"] = std::stod(PQgetvalue(res, i, 4));
+                stop["longitude"] = std::stod(PQgetvalue(res, i, 5));
+            }
+
+            if (!PQgetisnull(res, i, 6)) {
+                stop["distance_meters"] = std::stod(PQgetvalue(res, i, 6));
+            }
+
+            result.push_back(stop);
+        }
+
+        PQclear(res);
+        PQfinish(conn);
+
+        auto response = crow::response(result.dump());
+        setSecurityHeaders(response);
+        return response;
+    });
+
     app.port(8080).multithreaded().run();
 }
