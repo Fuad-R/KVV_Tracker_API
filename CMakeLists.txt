@@ -9,6 +9,7 @@ project(KVVAggregator)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+include(CTest)
 
 include(FetchContent)
 
@@ -65,6 +66,16 @@ set(BUILD_CPR_TESTS OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(cpr)
 
 # ------------------------------------------------------------------------------
+# 4b. Fetch Catch2 (for unit tests)
+# ------------------------------------------------------------------------------
+FetchContent_Declare(
+        Catch2
+        GIT_REPOSITORY https://github.com/catchorg/Catch2.git
+        GIT_TAG v3.8.1
+)
+FetchContent_MakeAvailable(Catch2)
+
+# ------------------------------------------------------------------------------
 # 5. PostgreSQL
 # ------------------------------------------------------------------------------
 find_package(PostgreSQL REQUIRED)
@@ -86,3 +97,7 @@ target_link_libraries(kvv_aggregator PRIVATE
         PostgreSQL::PostgreSQL
         OpenSSL::Crypto
 )
+
+if(BUILD_TESTING)
+    add_subdirectory(tests)
+endif()

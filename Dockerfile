@@ -21,7 +21,7 @@ WORKDIR /app
 COPY . .
 
 # Build project + install libraries into /usr/local
-RUN mkdir build && cd build && \
+RUN rm -rf build && mkdir build && cd build && \
     cmake .. -DCMAKE_BUILD_TYPE=Release && \
     make -j$(nproc) && \
     make install

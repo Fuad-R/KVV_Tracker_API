@@ -1,0 +1,33 @@
+{
+  "departureList": [
+    {
+      "servingLine": {
+        "number": "2",
+        "direction": "Wolfartsweier",
+        "motType": "4",
+        "delay": "2",
+        "hints": [
+          {"hint": "low floor"}
+        ],
+        "trainType": "tram"
+      },
+      "attrs": [
+        {"name": "planLowFloorVehicle", "value": "1"},
+        {"name": "planWheelchairAccess", "value": "1"}
+      ],
+      "platform": "1",
+      "countdown": "5",
+      "realDateTime": "2026-03-12T18:00:00"
+    },
+    {
+      "servingLine": {
+        "number": "S5",
+        "direction": "Wörth",
+        "motType": "1",
+        "delay": "0"
+      },
+      "platform": "Gleis 3",
+      "countdown": "8"
+    }
+  ]
+}

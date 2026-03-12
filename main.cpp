@@ -48,6 +48,33 @@ const std::string DB_CONFIG_CONTAINER_PATH = "/config/db_connection.txt";
 const long UPSTREAM_TIMEOUT_SECONDS = 15;
 const size_t MAX_QUERY_LENGTH = 200;
 const size_t MAX_STOPID_LENGTH = 100;
+std::string trim(const std::string& input);
+
+std::string getEnvOrDefault(const char* name, const std::string& fallback) {
+    const char* value = std::getenv(name);
+    if (!value) return fallback;
+    std::string parsed(value);
+    return parsed.empty() ? fallback : parsed;
+}
+
+std::vector<std::string> getNotificationProviders() {
+    const std::string providers = getEnvOrDefault("NOTIFICATION_API_PROVIDERS", "");
+    if (providers.empty()) {
+        return NOTIFICATION_API_PROVIDERS;
+    }
+
+    std::vector<std::string> parsedProviders;
+    std::stringstream stream(providers);
+    std::string part;
+    while (std::getline(stream, part, ',')) {
+        std::string trimmed = trim(part);
+        if (!trimmed.empty()) {
+            parsedProviders.push_back(trimmed);
+        }
+    }
+
+    return parsedProviders.empty() ? NOTIFICATION_API_PROVIDERS : parsedProviders;
+}
 
 // --- Input Validation ---
 bool isValidStopId(const std::string& stopId) {
@@ -654,6 +681,7 @@ void ensureStopsInDatabase(const json& searchResult, const std::string& original
 
 json searchStopsProvider(const std::string& query, const std::string& /*city*/ = "", bool includeLocation = false) {
     if (query.empty()) return json::array();
+    const std::string providerSearchUrl = getEnvOrDefault("PROVIDER_SEARCH_URL", Provider_SEARCH_URL);
 
     cpr::Parameters params{
             {"outputFormat", "rapidJSON"},
@@ -664,7 +692,7 @@ json searchStopsProvider(const std::string& query, const std::string& /*city*/ =
     };
 
     cpr::Response r = cpr::Get(
-        cpr::Url{Provider_SEARCH_URL},
+        cpr::Url{providerSearchUrl},
         params,
         cpr::Timeout{UPSTREAM_TIMEOUT_SECONDS * 1000}
     );
@@ -680,8 +708,9 @@ json searchStopsProvider(const std::string& query, const std::string& /*city*/ =
 
 // --- Helper: Fetch Departures ---
 json fetchDeparturesProvider(const std::string& stopId) {
+    const std::string providerDmUrl = getEnvOrDefault("PROVIDER_DM_URL", Provider_DM_URL);
     cpr::Response r = cpr::Get(
-        cpr::Url{Provider_DM_URL},
+        cpr::Url{providerDmUrl},
         cpr::Parameters{
             {"outputFormat", "JSON"},
             {"depType", "stopEvents"},
@@ -937,8 +966,9 @@ json fetchNotificationsFromProvider(const std::string& baseUrl, const std::strin
 json extractValidNotifications(const std::string& stopId) {
     json notifications = json::array();
     std::set<std::string> seenIds;
+    const auto providers = getNotificationProviders();
 
-    for (const auto& providerUrl : NOTIFICATION_API_PROVIDERS) {
+    for (const auto& providerUrl : providers) {
         json response = fetchNotificationsFromProvider(providerUrl, stopId);
 
         if (!response.contains("infos") || !response["infos"].is_object()) continue;
@@ -984,6 +1014,7 @@ json extractValidNotifications(const std::string& stopId) {
     return notifications;
 }
 
+#ifndef KVV_TRACKER_UNIT_TEST
 int main() {
     crow::SimpleApp app;
     initAuth();
@@ -1325,3 +1356,4 @@ int main() {
 
     app.port(8080).multithreaded().run();
 }
+#endif

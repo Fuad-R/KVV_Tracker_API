@@ -1,0 +1,11 @@
+[
+  {
+    "stop_id": "7000107",
+    "stop_name": "Knielingen",
+    "city": "Karlsruhe",
+    "location": {
+      "latitude": 49.0333,
+      "longitude": 8.3606
+    }
+  }
+]

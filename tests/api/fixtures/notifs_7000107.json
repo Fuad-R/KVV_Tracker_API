@@ -1,0 +1,30 @@
+{
+  "infos": {
+    "current": [
+      {
+        "id": "notif-1",
+        "priority": "normal",
+        "affected": {
+          "stops": [
+            {
+              "id": "7000107",
+              "properties": {
+                "stopId": "7000107"
+              }
+            }
+          ]
+        },
+        "properties": {
+          "providerCode": "KVV"
+        },
+        "infoLinks": [
+          {
+            "urlText": "Construction notice",
+            "content": "Service disruption",
+            "subtitle": "Knielingen"
+          }
+        ]
+      }
+    ]
+  }
+}

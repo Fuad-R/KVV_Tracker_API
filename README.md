@@ -219,3 +219,23 @@ All endpoints return JSON. Standard departure response:
 - Repeated queries within the TTL window return cached results
 - Platform filtering is applied post-normalization (locally)
 - Upstream provider supports up to 40 departures per request
+
+---
+
+## Testing
+
+### C++ Unit Tests
+
+```bash
+cmake -S . -B build
+cmake --build build -j$(nproc)
+ctest --test-dir build --output-on-failure
+```
+
+### API Tests (Docker)
+
+```bash
+docker-compose -f docker-compose.test.yml up --build -d
+pytest tests/api/
+docker-compose -f docker-compose.test.yml down -v
+```
