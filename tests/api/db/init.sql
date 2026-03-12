@@ -45,5 +45,5 @@ VALUES (2, '7c92350e6c89a32c27e4ac7a72c7b518cf8bd66721978211c3f213ad37d0f83a', '
 ON CONFLICT DO NOTHING;
 
 INSERT INTO api_keys (user_id, key_hash, key_prefix, name, revoked, expires_at)
-VALUES (3, 'a25552f5c9db0855658ef39cea5666a47d154771fb1a3906cb8c3691e2e04acc', 'expi', 'expired-test-key', FALSE, NOW() - INTERVAL '1 day')
+VALUES (3, 'a25552f5c9db0855658ef39cea5666a47d154771fb1a3906cb8c3691e2e04acc', 'expi', 'expired-test-key', FALSE, '2025-01-01 00:00:00+00')
 ON CONFLICT DO NOTHING;
