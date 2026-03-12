@@ -444,9 +444,9 @@ std::optional<std::string> buildMotArray(const json& stop) {
 bool extractCoordinates(const json& stop, double& lat, double& lon) {
     auto extractFromObject = [&](const json& coord) -> bool {
         if (coord.contains("x") && coord.contains("y")) {
-            // Stopfinder returns coordinates where x=longitude and y=latitude.
-            auto lonValue = jsonToDouble(coord.at("x"));
-            auto latValue = jsonToDouble(coord.at("y"));
+            // Stopfinder returns coordinates where x=latitude and y=longitude.
+            auto latValue = jsonToDouble(coord.at("x"));
+            auto lonValue = jsonToDouble(coord.at("y"));
             if (latValue && lonValue) {
                 lat = *latValue;
                 lon = *lonValue;
@@ -1279,13 +1279,15 @@ int main() {
             std::cerr << "Nearby stops query failed: " << PQerrorMessage(conn) << std::endl;
             if (res) PQclear(res);
             // The shared connection may be broken; reset it so the next request reconnects.
+            PGconn* to_close = nullptr;
             {
                 std::lock_guard<std::mutex> lock(nearby_db_mutex);
                 if (nearby_db_conn == conn) {
-                    PQfinish(nearby_db_conn);
+                    to_close = nearby_db_conn;
                     nearby_db_conn = nullptr;
                 }
             }
+            if (to_close) PQfinish(to_close);
             auto response = crow::response(500, R"({"error":"Database query failed"})");
             setSecurityHeaders(response);
             return response;
