@@ -49,4 +49,7 @@ def wait_for_service(base_url):
         except requests.ConnectionError:
             pass
         time.sleep(2)
-    pytest.fail(f"Service at {base_url} did not become healthy within {max_retries * 2}s")
+    pytest.fail(
+        f"Service at {base_url} did not become healthy within {max_retries * 2}s. "
+        "Check service logs with: docker compose -f docker-compose.test.yml logs"
+    )

@@ -265,7 +265,7 @@ TEST_CASE("extractCoordinates from coord object with lat/lon", "[coordinates]") 
 }
 
 TEST_CASE("extractCoordinates from coord array", "[coordinates]") {
-    // Array format: [latitude, longitude]
+    // Stopfinder coordinate array format: [latitude, longitude]
     json stop = {{"coord", json::array({49.0069, 8.4037})}};
     double lat = 0, lon = 0;
     REQUIRE(extractCoordinates(stop, lat, lon));
