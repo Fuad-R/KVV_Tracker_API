@@ -12,6 +12,7 @@
   - [Search Stops](#2-search-stops)
   - [Get Departures](#3-get-departures)
   - [Get Notifications](#4-get-notifications)
+  - [Nearby Stops](#5-nearby-stops)
 - [Data Types Reference](#data-types-reference)
   - [MOT Codes](#mot-codes-mode-of-transport)
 - [Error Handling](#error-handling)
@@ -354,6 +355,92 @@ GET /api/current_notifs?stopID=7000107
 
 ---
 
+### 5. Nearby Stops
+
+Find transit stops near a geographic location. Returns stops from the database ordered by distance (nearest first). Stops are populated via the [Search Stops](#2-search-stops) endpoint, so only previously searched stops are available.
+
+| Property | Value |
+|---|---|
+| **URL** | `/api/stops/nearby` |
+| **Method** | `GET` |
+
+#### Query Parameters
+
+| Parameter | Required | Type | Default | Description |
+|---|---|---|---|---|
+| `lat` | **Yes** | number | — | Latitude of the center point. Must be between -90 and 90. |
+| `lon` | **Yes** | number | — | Longitude of the center point. Must be between -180 and 180. |
+| `radius` | No | number | `1000` | Search radius in meters. Must be greater than 0 and at most 50000. |
+| `limit` | No | integer | `10` | Maximum number of stops to return. Must be between 1 and 100. |
+
+#### Response
+
+**`200 OK`** — JSON array of stop objects ordered by distance (nearest first).
+
+**Example Request:**
+```
+GET /api/stops/nearby?lat=49.0094&lon=8.4044&radius=500&limit=5
+```
+
+**Example Response:**
+```json
+[
+  {
+    "stop_id": "de:08212:1",
+    "local_id": "7000001",
+    "stop_name": "Karlsruhe, Marktplatz",
+    "city": "Karlsruhe",
+    "latitude": 49.00937,
+    "longitude": 8.40390,
+    "distance_meters": 72.34
+  },
+  {
+    "stop_id": "de:08212:2",
+    "local_id": "7000002",
+    "stop_name": "Karlsruhe, Kronenplatz",
+    "city": "Karlsruhe",
+    "latitude": 49.00890,
+    "longitude": 8.41050,
+    "distance_meters": 312.56
+  }
+]
+```
+
+#### Stop Object Fields
+
+| Field | Type | Description |
+|---|---|---|
+| `stop_id` | string | Global stop ID (e.g. `"de:08212:1"`). Use this with the departures and notifications endpoints. |
+| `local_id` | string or null | Local numeric stop ID (e.g. `"7000001"`). `null` if unavailable. |
+| `stop_name` | string | Full stop name. |
+| `city` | string or null | City or locality name. `null` if unavailable. |
+| `latitude` | number | Latitude of the stop. |
+| `longitude` | number | Longitude of the stop. |
+| `distance_meters` | number | Distance in meters from the requested coordinates to the stop. |
+
+#### Errors
+
+| Status | Body | Cause |
+|---|---|---|
+| `400` | `{"error": "Missing 'lat' and/or 'lon' parameter"}` | One or both of `lat` / `lon` were not provided. |
+| `400` | `{"error": "Invalid 'lat' or 'lon' value"}` | `lat` or `lon` is not a valid number. |
+| `400` | `{"error": "'lat' must be between -90 and 90, 'lon' must be between -180 and 180"}` | Coordinates are out of valid range. |
+| `400` | `{"error": "Invalid 'radius' value"}` | `radius` is not a valid number. |
+| `400` | `{"error": "'radius' must be greater than 0 and at most 50000 meters"}` | Radius is out of valid range. |
+| `400` | `{"error": "Invalid 'limit' value"}` | `limit` is not a valid integer. |
+| `400` | `{"error": "'limit' must be between 1 and 100"}` | Limit is out of valid range. |
+| `503` | `{"error": "Database not configured"}` | No database connection is configured. |
+| `503` | `{"error": "Database connection failed"}` | Unable to connect to the database. |
+| `500` | `{"error": "Database query failed"}` | The spatial query failed (e.g. PostGIS extension not installed). |
+
+#### Notes
+
+- This endpoint queries the local `stops` database using PostGIS spatial functions (`ST_DWithin`, `ST_Distance`).
+- Only stops that have been previously discovered via the [Search Stops](#2-search-stops) endpoint are available. If you need comprehensive coverage, search for stops in the area first.
+- Distance is calculated on the WGS 84 ellipsoid (geographic distance, not planar).
+
+---
+
 ## Data Types Reference
 
 ### MOT Codes (Mode of Transport)
@@ -400,12 +487,18 @@ All error responses follow this structure:
 |---|---|---|
 | `200` | Success | Request completed successfully. |
 | `400` | Bad Request | Missing required parameters, or parameter values are invalid. |
+| `401` | Unauthorized | Authentication is enabled and the API key is missing or invalid. |
+| `500` | Internal Server Error | An internal error occurred (e.g. a database query failed). |
 | `502` | Bad Gateway | The upstream EFA provider is unreachable or returned an error. |
+| `503` | Service Unavailable | A required service (e.g. database) is not configured or unreachable. |
 
 ### Input Validation Rules
 
 - **Stop IDs** must be 1–100 characters, matching the pattern `^[a-zA-Z0-9:_. -]+$`.
 - **Search queries** must be 1–200 characters with no ASCII control characters (0x00–0x1F, 0x7F).
+- **Coordinates** (`lat`, `lon`) must be valid numbers within geographic bounds (latitude: -90 to 90, longitude: -180 to 180).
+- **Radius** must be greater than 0 and at most 50,000 meters.
+- **Limit** must be an integer between 1 and 100.
 - Requests with invalid input are rejected with `400` before any upstream call is made.
 
 ---
@@ -594,6 +687,12 @@ curl "http://localhost:8080/api/stops/de:08212:1?track=3"
 
 # Get notifications for a stop
 curl "http://localhost:8080/api/current_notifs?stopID=7000107"
+
+# Find nearby stops (within 500m, max 5 results)
+curl "http://localhost:8080/api/stops/nearby?lat=49.0094&lon=8.4044&radius=500&limit=5"
+
+# Find nearby stops (defaults: 1000m radius, 10 results)
+curl "http://localhost:8080/api/stops/nearby?lat=49.0094&lon=8.4044"
 ```
 
 ---
