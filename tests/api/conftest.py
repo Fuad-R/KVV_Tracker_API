@@ -46,7 +46,7 @@ def wait_for_service(base_url):
             resp = requests.get(url, timeout=2)
             if resp.status_code == 200:
                 return
-        except requests.ConnectionError:
+        except requests.exceptions.RequestException:
             pass
         time.sleep(2)
     pytest.fail(

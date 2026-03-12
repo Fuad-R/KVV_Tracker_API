@@ -30,7 +30,7 @@ services:
     ports:
       - "8080:8080"
     environment:
-      AUTH: "false"
+      AUTH: "${AUTH:-false}"
     volumes:
       - ./tests/db_connection_test.txt:/config/db_connection.txt
     depends_on:
