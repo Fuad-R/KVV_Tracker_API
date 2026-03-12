@@ -1219,9 +1219,39 @@ int main() {
             return response;
         }
 
-        PGconn* conn = connectToDatabase(*db_config);
-        if (!conn || PQstatus(conn) != CONNECTION_OK) {
-            if (conn) PQfinish(conn);
+        // Use a shared, mutex-guarded connection for this frequently polled nearby-stop endpoint
+        static std::mutex nearby_db_mutex;
+        static PGconn* nearby_db_conn = nullptr;
+
+        PGconn* conn = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(nearby_db_mutex);
+
+            // Reuse existing connection if it is still healthy
+            if (nearby_db_conn && PQstatus(nearby_db_conn) == CONNECTION_OK) {
+                conn = nearby_db_conn;
+            } else {
+                // Clean up any stale/broken connection
+                if (nearby_db_conn) {
+                    PQfinish(nearby_db_conn);
+                    nearby_db_conn = nullptr;
+                }
+
+                // Establish a new connection
+                PGconn* new_conn = connectToDatabase(*db_config);
+                if (!new_conn || PQstatus(new_conn) != CONNECTION_OK) {
+                    if (new_conn) {
+                        PQfinish(new_conn);
+                    }
+                    // Leave nearby_db_conn as nullptr; conn remains nullptr
+                } else {
+                    nearby_db_conn = new_conn;
+                    conn = nearby_db_conn;
+                }
+            }
+        }
+
+        if (!conn) {
             auto response = crow::response(503, R"({"error":"Database connection failed"})");
             setSecurityHeaders(response);
             return response;
