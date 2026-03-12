@@ -1278,7 +1278,16 @@ int main() {
         if (!res || PQresultStatus(res) != PGRES_TUPLES_OK) {
             std::cerr << "Nearby stops query failed: " << PQerrorMessage(conn) << std::endl;
             if (res) PQclear(res);
-            PQfinish(conn);
+            // The shared connection may be broken; reset it so the next request reconnects.
+            PGconn* to_close = nullptr;
+            {
+                std::lock_guard<std::mutex> lock(nearby_db_mutex);
+                if (nearby_db_conn == conn) {
+                    to_close = nearby_db_conn;
+                    nearby_db_conn = nullptr;
+                }
+            }
+            if (to_close) PQfinish(to_close);
             auto response = crow::response(500, R"({"error":"Database query failed"})");
             setSecurityHeaders(response);
             return response;
@@ -1306,7 +1315,6 @@ int main() {
         }
 
         PQclear(res);
-        PQfinish(conn);
 
         auto response = crow::response(result.dump());
         setSecurityHeaders(response);
