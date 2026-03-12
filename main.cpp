@@ -16,6 +16,7 @@
 #include <set>
 #include <ctime>
 #include <regex>
+#include <locale>
 #include <libpq-fe.h>
 #include <cstdlib>
 #include <openssl/evp.h>
@@ -372,6 +373,7 @@ std::optional<std::string> getJsonString(const json& obj, std::initializer_list<
 
 std::string formatDouble(double value) {
     std::ostringstream stream;
+    stream.imbue(std::locale::classic());  // Use C locale to ensure '.' as decimal separator
     stream << std::fixed << std::setprecision(8) << value;
     return stream.str();
 }
