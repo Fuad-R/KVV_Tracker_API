@@ -1,0 +1,6 @@
+host=test-db
+port=5432
+dbname=testdb
+user=testuser
+password=testpass
+sslmode=disable

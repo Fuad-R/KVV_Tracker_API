@@ -1,27 +1,17 @@
 #include "crow.h"
 #include <cpr/cpr.h>
-#include <nlohmann/json.hpp>
 #include <iostream>
 #include <string>
 #include <vector>
 #include <mutex>
 #include <map>
 #include <chrono>
-#include <algorithm>
-#include <cctype>
 #include <fstream>
-#include <optional>
-#include <sstream>
-#include <iomanip>
 #include <set>
-#include <ctime>
-#include <regex>
-#include <locale>
 #include <libpq-fe.h>
 #include <cstdlib>
-#include <openssl/evp.h>
 
-using json = nlohmann::json;
+#include "utils.h"
 
 // --- Cache Structure ---
 struct CacheEntry {
@@ -46,23 +36,6 @@ const std::vector<std::string> NOTIFICATION_API_PROVIDERS = {
 };
 const std::string DB_CONFIG_CONTAINER_PATH = "/config/db_connection.txt";
 const long UPSTREAM_TIMEOUT_SECONDS = 15;
-const size_t MAX_QUERY_LENGTH = 200;
-const size_t MAX_STOPID_LENGTH = 100;
-
-// --- Input Validation ---
-bool isValidStopId(const std::string& stopId) {
-    if (stopId.empty() || stopId.size() > MAX_STOPID_LENGTH) return false;
-    static const std::regex stopIdPattern("^[a-zA-Z0-9:_. -]+$");
-    return std::regex_match(stopId, stopIdPattern);
-}
-
-bool isValidSearchQuery(const std::string& query) {
-    if (query.empty() || query.size() > MAX_QUERY_LENGTH) return false;
-    for (unsigned char c : query) {
-        if (c < 0x20 || c == 0x7F) return false;
-    }
-    return true;
-}
 
 // --- Cache Eviction ---
 void evictExpiredCacheEntries() {
@@ -97,23 +70,6 @@ PGconn* auth_db_conn = nullptr;
 std::map<std::string, std::chrono::steady_clock::time_point> last_used_updates;
 constexpr int LAST_USED_UPDATE_INTERVAL_SECONDS = 300; // 5 minutes
 
-std::string sha256Hex(const std::string& input) {
-    unsigned char hash[EVP_MAX_MD_SIZE];
-    unsigned int hashLen = 0;
-    EVP_MD_CTX* ctx = EVP_MD_CTX_new();
-    if (!ctx) return "";
-    bool ok = EVP_DigestInit_ex(ctx, EVP_sha256(), nullptr) == 1
-           && EVP_DigestUpdate(ctx, input.c_str(), input.size()) == 1
-           && EVP_DigestFinal_ex(ctx, hash, &hashLen) == 1;
-    EVP_MD_CTX_free(ctx);
-    if (!ok || hashLen == 0) return "";
-    std::ostringstream ss;
-    for (unsigned int i = 0; i < hashLen; i++) {
-        ss << std::hex << std::setfill('0') << std::setw(2) << static_cast<int>(hash[i]);
-    }
-    return ss.str();
-}
-
 void initAuth() {
     const char* authEnv = std::getenv("AUTH");
     if (authEnv) {
@@ -133,16 +89,6 @@ void initAuth() {
     }
 }
 
-// Constant-time string comparison to prevent timing attacks
-bool constantTimeEquals(const std::string& a, const std::string& b) {
-    if (a.size() != b.size()) return false;
-    volatile unsigned char result = 0;
-    for (size_t i = 0; i < a.size(); ++i) {
-        result |= static_cast<unsigned char>(a[i]) ^ static_cast<unsigned char>(b[i]);
-    }
-    return result == 0;
-}
-
 crow::response unauthorizedResponse() {
     auto response = crow::response(401, R"({"error":"Unauthorized. Invalid or missing API key."})");
     setSecurityHeaders(response);
@@ -159,23 +105,6 @@ struct DbConfig {
 };
 
 std::optional<DbConfig> db_config;
-
-// --- Helper: String Utilities ---
-std::string toLower(const std::string& str) {
-    std::string s = str;
-    std::transform(s.begin(), s.end(), s.begin(),
-                   [](unsigned char c){ return std::tolower(c); });
-    return s;
-}
-
-std::string trim(const std::string& input) {
-    auto start = std::find_if_not(input.begin(), input.end(),
-                                  [](unsigned char c){ return std::isspace(c); });
-    auto end = std::find_if_not(input.rbegin(), input.rend(),
-                                [](unsigned char c){ return std::isspace(c); }).base();
-    if (start >= end) return "";
-    return std::string(start, end);
-}
 
 // --- Helper: Database Configuration ---
 
@@ -331,176 +260,6 @@ bool isAuthenticated(const crow::request& req) {
     // Fall back to env-var comparison if no database is configured
     if (!api_key.empty()) {
         return constantTimeEquals(providedKey, api_key);
-    }
-
-    return false;
-}
-
-// --- Helper: JSON Conversion Utilities ---
-
-std::optional<std::string> jsonToString(const json& value) {
-    if (value.is_string()) return value.get<std::string>();
-    if (value.is_number_integer()) return std::to_string(value.get<long long>());
-    if (value.is_number_float()) {
-        std::ostringstream stream;
-        stream << std::setprecision(15) << value.get<double>();
-        return stream.str();
-    }
-    return std::nullopt;
-}
-
-std::optional<double> jsonToDouble(const json& value) {
-    if (value.is_number()) return value.get<double>();
-    if (value.is_string()) {
-        try {
-            return std::stod(value.get<std::string>());
-        } catch (...) {
-            return std::nullopt;
-        }
-    }
-    return std::nullopt;
-}
-
-std::optional<std::string> getJsonString(const json& obj, std::initializer_list<const char*> keys) {
-    for (const auto* key : keys) {
-        if (obj.contains(key)) {
-            auto value = jsonToString(obj.at(key));
-            if (value && !value->empty()) return value;
-        }
-    }
-    return std::nullopt;
-}
-
-std::string formatDouble(double value) {
-    std::ostringstream stream;
-    stream.imbue(std::locale::classic());  // Use C locale to ensure '.' as decimal separator
-    stream << std::fixed << std::setprecision(8) << value;
-    return stream.str();
-}
-
-// --- Helper: MOT (Mode of Transport) Parsing ---
-
-std::optional<std::string> buildMotArray(const json& stop) {
-    std::vector<int> motValues;
-
-    auto addValue = [&](const json& value) {
-        if (value.is_number_integer()) {
-            motValues.push_back(value.get<int>());
-        } else if (value.is_string()) {
-            try {
-                motValues.push_back(std::stoi(value.get<std::string>()));
-            } catch (...) {
-                return;
-            }
-        } else if (value.is_object()) {
-            auto nested = getJsonString(value, {"motType", "type", "mode"});
-            if (nested) {
-                try {
-                    motValues.push_back(std::stoi(*nested));
-                } catch (...) {
-                    return;
-                }
-            }
-        }
-    };
-
-    if (stop.contains("modes")) {
-        const auto& modes = stop.at("modes");
-        if (modes.is_array()) {
-            for (const auto& item : modes) addValue(item);
-        } else {
-            addValue(modes);
-        }
-    } else if (stop.contains("mot")) {
-        const auto& mot = stop.at("mot");
-        if (mot.is_array()) {
-            for (const auto& item : mot) addValue(item);
-        } else {
-            addValue(mot);
-        }
-    } else if (stop.contains("productClasses")) {
-        const auto& classes = stop.at("productClasses");
-        if (classes.is_array()) {
-            for (const auto& item : classes) addValue(item);
-        } else {
-            addValue(classes);
-        }
-    } else if (stop.contains("motType")) {
-        addValue(stop.at("motType"));
-    }
-
-    if (motValues.empty()) return std::nullopt;
-
-    std::ostringstream stream;
-    stream << "{";
-    for (size_t i = 0; i < motValues.size(); ++i) {
-        if (i > 0) stream << ",";
-        stream << motValues[i];
-    }
-    stream << "}";
-    return stream.str();
-}
-
-// --- Helper: Coordinate Extraction ---
-
-bool extractCoordinates(const json& stop, double& lat, double& lon) {
-    auto extractFromObject = [&](const json& coord) -> bool {
-        if (coord.contains("x") && coord.contains("y")) {
-            // Stopfinder returns coordinates where x=latitude and y=longitude.
-            auto latValue = jsonToDouble(coord.at("x"));
-            auto lonValue = jsonToDouble(coord.at("y"));
-            if (latValue && lonValue) {
-                lat = *latValue;
-                lon = *lonValue;
-                return true;
-            }
-        }
-        if (coord.contains("lon") && coord.contains("lat")) {
-            auto x = jsonToDouble(coord.at("lon"));
-            auto y = jsonToDouble(coord.at("lat"));
-            if (x && y) {
-                lon = *x;
-                lat = *y;
-                return true;
-            }
-        }
-        if (coord.contains("longitude") && coord.contains("latitude")) {
-            auto x = jsonToDouble(coord.at("longitude"));
-            auto y = jsonToDouble(coord.at("latitude"));
-            if (x && y) {
-                lon = *x;
-                lat = *y;
-                return true;
-            }
-        }
-        return false;
-    };
-
-    if (stop.contains("coord")) {
-        const auto& coord = stop.at("coord");
-        if (coord.is_object() && extractFromObject(coord)) return true;
-        if (coord.is_array() && coord.size() >= 2) {
-            // Stopfinder arrays use [latitude, longitude] ordering.
-            auto latValue = jsonToDouble(coord.at(0));
-            auto lonValue = jsonToDouble(coord.at(1));
-            if (latValue && lonValue) {
-                lat = *latValue;
-                lon = *lonValue;
-                return true;
-            }
-        }
-    }
-
-    if (extractFromObject(stop)) return true;
-
-    if (stop.contains("latitude") && stop.contains("longitude")) {
-        auto y = jsonToDouble(stop.at("latitude"));
-        auto x = jsonToDouble(stop.at("longitude"));
-        if (x && y) {
-            lon = *x;
-            lat = *y;
-            return true;
-        }
     }
 
     return false;
@@ -834,16 +593,6 @@ json normalizeResponse(const json& ProviderData, bool detailed = false, bool inc
     }
 
     return result;
-}
-
-// --- Helper: Parse ISO 8601 Timestamp ---
-
-std::optional<std::time_t> parseISO8601(const std::string& timestamp) {
-    std::tm tm = {};
-    std::istringstream ss(timestamp);
-    ss >> std::get_time(&tm, "%Y-%m-%dT%H:%M:%S");
-    if (ss.fail()) return std::nullopt;
-    return timegm(&tm); // Interpret as UTC
 }
 
 // --- Helper: Validity Time Range Check ---

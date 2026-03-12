@@ -219,3 +219,53 @@ All endpoints return JSON. Standard departure response:
 - Repeated queries within the TTL window return cached results
 - Platform filtering is applied post-normalization (locally)
 - Upstream provider supports up to 40 departures per request
+
+## Testing
+
+The project includes C++ unit tests and Python API integration tests.
+
+### C++ Unit Tests
+
+Unit tests use [Catch2](https://github.com/catchorg/Catch2) and cover pure utility functions
+(validation, string helpers, JSON processing, coordinate extraction, SHA-256 hashing).
+
+```bash
+cd tests/cpp
+mkdir -p build && cd build
+cmake .. -DCMAKE_BUILD_TYPE=Release
+make -j$(nproc)
+ctest --output-on-failure
+```
+
+### API Integration Tests
+
+API tests use [pytest](https://docs.pytest.org/) and [requests](https://docs.python-requests.org/)
+to exercise the running service end-to-end.
+
+**Start the test environment** (requires Docker):
+
+```bash
+docker-compose -f docker-compose.test.yml up --build -d
+```
+
+**Run the tests:**
+
+```bash
+pip install -r tests/api/requirements.txt
+pytest tests/api/ -v
+```
+
+**Tear down:**
+
+```bash
+docker-compose -f docker-compose.test.yml down -v
+```
+
+### Continuous Integration
+
+The GitHub Actions workflow (`.github/workflows/ci.yml`) automatically:
+
+1. Builds the project with CMake
+2. Runs C++ unit tests via CTest
+3. Starts the service in Docker (with a test PostgreSQL database)
+4. Runs the API integration tests with pytest

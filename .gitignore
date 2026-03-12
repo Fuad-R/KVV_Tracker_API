@@ -90,3 +90,9 @@ cmake-build-*/
 .idea/vcs.xml
 .idea/deployment.xml
 .idea/remote-targets.xml
+
+### Test Artifacts ###
+tests/cpp/build/
+__pycache__/
+*.pyc
+.pytest_cache/
