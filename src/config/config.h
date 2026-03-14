@@ -14,6 +14,7 @@
 #include <iomanip>
 #include <regex>
 #include <iostream>
+#include <locale>
 #include <nlohmann/json.hpp>
 
 using json = nlohmann::json;
@@ -100,6 +101,7 @@ inline std::optional<std::string> jsonToString(const json& value) {
     if (value.is_number_integer()) return std::to_string(value.get<long long>());
     if (value.is_number_float()) {
         std::ostringstream stream;
+        stream.imbue(std::locale::classic());
         stream << std::setprecision(15) << value.get<double>();
         return stream.str();
     }
@@ -130,6 +132,7 @@ inline std::optional<std::string> getJsonString(const json& obj, std::initialize
 
 inline std::string formatDouble(double value) {
     std::ostringstream stream;
+    stream.imbue(std::locale::classic());
     stream << std::fixed << std::setprecision(8) << value;
     return stream.str();
 }
