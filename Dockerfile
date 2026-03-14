@@ -54,9 +54,6 @@ COPY --from=builder /usr/local/lib /usr/local/lib
 # Ensure linker can find libs
 RUN echo "/usr/local/lib" > /etc/ld.so.conf.d/local.conf && ldconfig
 
-# Optional data file
-COPY --from=builder /app/vehicle_types.txt .
-
 # Set ownership and switch to non-root user
 RUN chown -R appuser:appuser /app
 USER appuser
