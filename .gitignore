@@ -14,8 +14,8 @@
 # Environment files (containing secrets, API keys, credentials)
 .env
 *.env
-.env.*
-!.env.example
+docs/.env.example
+!docs/.env.example
 
 # Local configuration that shouldn't be shared
 *.local
