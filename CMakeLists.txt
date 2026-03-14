@@ -77,7 +77,21 @@ find_package(OpenSSL REQUIRED)
 # ------------------------------------------------------------------------------
 # 6. Build Target
 # ------------------------------------------------------------------------------
-add_executable(kvv_aggregator main.cpp)
+add_executable(kvv_aggregator
+        src/main.cpp
+        src/db/database.cpp
+        src/models/api_key.cpp
+        src/services/auth_service.cpp
+        src/services/stops_service.cpp
+        src/services/departures_service.cpp
+        src/middleware/api_key_auth.cpp
+        src/routes/auth_routes.cpp
+        src/routes/stops_routes.cpp
+        src/routes/departures_routes.cpp
+        src/routes/vehicles_routes.cpp
+)
+
+target_include_directories(kvv_aggregator PRIVATE ${CMAKE_SOURCE_DIR}/src)
 
 target_link_libraries(kvv_aggregator PRIVATE
         Crow::Crow
