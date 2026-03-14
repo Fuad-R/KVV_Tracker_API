@@ -5,6 +5,11 @@ bool Database::loadConfig(const std::string& path) {
     return config_.has_value();
 }
 
+bool Database::loadConfigFromEnv() {
+    config_ = loadDbConfigFromEnv();
+    return config_.has_value();
+}
+
 bool Database::hasConfig() const {
     return config_.has_value();
 }

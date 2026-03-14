@@ -8,6 +8,7 @@
 #include <chrono>
 #include <algorithm>
 #include <cctype>
+#include <cstdlib>
 #include <fstream>
 #include <sstream>
 #include <iomanip>
@@ -133,7 +134,34 @@ inline std::string formatDouble(double value) {
     return stream.str();
 }
 
-// --- Database Config Loading ---
+// --- Database Config Loading from Environment Variables ---
+inline std::optional<DbConfig> loadDbConfigFromEnv() {
+    auto getEnv = [](const char* name) -> std::string {
+        const char* val = std::getenv(name);
+        return (val && val[0] != '\0') ? std::string(val) : "";
+    };
+
+    DbConfig config;
+    config.host     = getEnv("DB_HOST");
+    config.port     = getEnv("DB_PORT");
+    config.dbname   = getEnv("DB_NAME");
+    config.user     = getEnv("DB_USER");
+    config.password  = getEnv("DB_PASSWORD");
+    config.sslmode  = getEnv("DB_SSLMODE");
+
+    if (config.host.empty() || config.port.empty() || config.dbname.empty() ||
+        config.user.empty() || config.password.empty()) {
+        return std::nullopt;
+    }
+
+    if (config.sslmode.empty()) {
+        config.sslmode = "require";
+    }
+
+    return config;
+}
+
+// --- Database Config Loading from File ---
 inline std::optional<DbConfig> loadDbConfig(const std::string& path) {
     std::ifstream file(path);
     if (!file) {

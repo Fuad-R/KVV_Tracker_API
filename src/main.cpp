@@ -12,13 +12,26 @@ int main() {
     // Initialize authentication
     initAuth();
 
-    // Initialize database
+    // Initialize database (try environment variables first, then config files)
     Database db;
-    if (!db.loadConfig(DB_CONFIG_PATH)) {
-        db.loadConfig(DB_CONFIG_CONTAINER_PATH);
+    if (!db.loadConfigFromEnv()) {
+        if (!db.loadConfig(DB_CONFIG_PATH)) {
+            db.loadConfig(DB_CONFIG_CONTAINER_PATH);
+        }
     }
     if (!db.hasConfig()) {
         std::cerr << "Database config unavailable. Stop persistence disabled." << std::endl;
+    }
+
+    // Determine server port (default: 8080)
+    int port = 8080;
+    const char* portEnv = std::getenv("APP_PORT");
+    if (portEnv && portEnv[0] != '\0') {
+        try {
+            port = std::stoi(std::string(portEnv));
+        } catch (...) {
+            std::cerr << "Invalid APP_PORT value, using default 8080." << std::endl;
+        }
     }
 
     // Register routes
@@ -27,5 +40,5 @@ int main() {
     registerDeparturesRoutes(app, db);
     registerNotificationsRoutes(app, db);
 
-    app.port(8080).multithreaded().run();
+    app.port(port).multithreaded().run();
 }

@@ -6,6 +6,7 @@
 class Database {
 public:
     bool loadConfig(const std::string& path);
+    bool loadConfigFromEnv();
     bool hasConfig() const;
     PGconn* connect() const;
     const DbConfig& config() const;
