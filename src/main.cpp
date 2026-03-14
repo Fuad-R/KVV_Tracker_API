@@ -4,7 +4,6 @@
 #include "routes/auth_routes.h"
 #include "routes/stops_routes.h"
 #include "routes/departures_routes.h"
-#include "routes/vehicles_routes.h"
 
 int main() {
     crow::SimpleApp app;
@@ -25,7 +24,6 @@ int main() {
     registerAuthRoutes(app, db);
     registerStopsRoutes(app, db);
     registerDeparturesRoutes(app, db);
-    registerVehiclesRoutes(app, db);
 
     app.port(8080).multithreaded().run();
 }

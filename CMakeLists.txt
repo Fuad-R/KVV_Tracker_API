@@ -88,7 +88,6 @@ add_executable(kvv_aggregator
         src/routes/auth_routes.cpp
         src/routes/stops_routes.cpp
         src/routes/departures_routes.cpp
-        src/routes/vehicles_routes.cpp
 )
 
 target_include_directories(kvv_aggregator PRIVATE ${CMAKE_SOURCE_DIR}/src)
