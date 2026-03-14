@@ -81,7 +81,7 @@ inline bool isValidSearchQuery(const std::string& query) {
     return true;
 }
 
-// --- Cache Eviction ---
+// --- Cache Eviction (caller must hold the appropriate mutex) ---
 inline void evictExpiredCacheEntries(std::map<std::string, CacheEntry>& cache) {
     auto now = std::chrono::steady_clock::now();
     for (auto it = cache.begin(); it != cache.end(); ) {
