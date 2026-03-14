@@ -2,6 +2,8 @@
 
 #include "../config/config.h"
 #include <libpq-fe.h>
+#include <string>
+#include <optional>
 
 class Database {
 public:
