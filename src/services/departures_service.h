@@ -1,5 +1,6 @@
 #pragma once
 
+#include <string>
 #include "../config/config.h"
 
 json fetchDeparturesProvider(const std::string& stopId);
