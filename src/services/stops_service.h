@@ -2,6 +2,8 @@
 
 #include "../config/config.h"
 #include "../db/database.h"
+#include <string>
+#include <optional>
 #include <vector>
 
 struct StopRecord {
