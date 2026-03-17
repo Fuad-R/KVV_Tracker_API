@@ -354,6 +354,8 @@ json getNearbyStops(double latitude, double longitude, int maxDistanceMeters, in
             stop["longitude"] = std::stod(PQgetvalue(res, i, 5));
             stop["distance_meters"] = std::stod(PQgetvalue(res, i, 6));
         } catch (...) {
+            // Fallback to raw values if PostgreSQL returns non-standard numeric formatting.
+            std::cerr << "Failed to parse numeric nearby stop fields for stop_id=" << PQgetvalue(res, i, 0) << std::endl;
             stop["latitude"] = PQgetvalue(res, i, 4);
             stop["longitude"] = PQgetvalue(res, i, 5);
             stop["distance_meters"] = PQgetvalue(res, i, 6);

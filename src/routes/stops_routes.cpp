@@ -95,7 +95,13 @@ void registerStopsRoutes(crow::SimpleApp& app, Database& db) {
         auto latitude = parseDoubleParam(latParam);
         auto longitude = parseDoubleParam(longParam);
 
-        if (!latitude || !longitude || *latitude < -90.0 || *latitude > 90.0 || *longitude < -180.0 || *longitude > 180.0) {
+        bool invalidCoordinates = !latitude || !longitude;
+        if (!invalidCoordinates) {
+            invalidCoordinates = (*latitude < -90.0 || *latitude > 90.0 ||
+                                  *longitude < -180.0 || *longitude > 180.0);
+        }
+
+        if (invalidCoordinates) {
             auto response = crow::response(400, R"({"error":"Invalid 'lat' or 'long' parameter"})");
             setSecurityHeaders(response);
             return response;
