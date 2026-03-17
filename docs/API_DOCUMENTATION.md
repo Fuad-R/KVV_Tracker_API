@@ -10,8 +10,9 @@
 - [Endpoints](#endpoints)
   - [Health Check](#1-health-check)
   - [Search Stops](#2-search-stops)
-  - [Get Departures](#3-get-departures)
-  - [Get Notifications](#4-get-notifications)
+  - [Nearby Stops](#3-nearby-stops)
+  - [Get Departures](#4-get-departures)
+  - [Get Notifications](#5-get-notifications)
 - [Data Types Reference](#data-types-reference)
   - [MOT Codes](#mot-codes-mode-of-transport)
 - [Error Handling](#error-handling)
@@ -191,7 +192,61 @@ GET /api/stops/search?q=Marktplatz&location=true
 
 ---
 
-### 3. Get Departures
+### 3. Nearby Stops
+
+Return stored stops near a coordinate using a PostGIS query on the `stops.location` geography column.
+
+| Property | Value |
+|---|---|
+| **URL** | `/api/stops/nearby` |
+| **Method** | `GET` |
+
+#### Query Parameters
+
+| Parameter | Required | Type | Default | Description |
+|---|---|---|---|---|
+| `lat` | **Yes** | number | — | Latitude in decimal degrees (`-90` to `90`). |
+| `long` | **Yes** | number | — | Longitude in decimal degrees (`-180` to `180`). |
+| `distance` | No | integer | `1000` | Maximum search radius in meters. Range: `1` to `50000`. |
+| `limit` | No | integer | `20` | Maximum number of stops returned. Range: `1` to `100`. |
+
+#### Response
+
+**`200 OK`** — JSON array of nearby stops ordered by distance ascending.
+
+**Example Request:**
+```
+GET /api/stops/nearby?lat=49.00937&long=8.40390&distance=750&limit=10
+```
+
+**Example Response:**
+```json
+[
+  {
+    "stop_id": "de:08212:1",
+    "local_id": "7000001",
+    "stop_name": "Karlsruhe, Marktplatz",
+    "city": "Karlsruhe",
+    "latitude": 49.00937,
+    "longitude": 8.4039,
+    "distance_meters": 34.28
+  }
+]
+```
+
+#### Errors
+
+| Status | Body | Cause |
+|---|---|---|
+| `400` | `{"error":"Missing required 'lat' and/or 'long' parameter"}` | One or both required coordinate params are missing. |
+| `400` | `{"error":"Invalid 'lat' or 'long' parameter"}` | Coordinates are malformed or outside valid ranges. |
+| `400` | `{"error":"Invalid 'distance' parameter"}` | `distance` is not an integer in range `1..50000`. |
+| `400` | `{"error":"Invalid 'limit' parameter"}` | `limit` is not an integer in range `1..100`. |
+| `503` | `{"error":"Database not configured"}` | No DB configuration is loaded. |
+
+---
+
+### 4. Get Departures
 
 Retrieve real-time departures from a specific stop. This is the primary endpoint for building departure boards.
 
@@ -288,7 +343,7 @@ Retrieve real-time departures from a specific stop. This is the primary endpoint
 
 ---
 
-### 4. Get Notifications
+### 5. Get Notifications
 
 Retrieve current service alerts and disruptions affecting a specific stop.
 
