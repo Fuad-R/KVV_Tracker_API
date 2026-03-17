@@ -43,6 +43,21 @@ Search for transit stops by name.
 
 ---
 
+### Nearby Stops
+**`GET /api/stops/nearby`**
+
+Returns stops near a coordinate using the persisted `stops` table and PostGIS distance filtering.
+
+**Query Parameters:**
+- `lat` (required) - Latitude in decimal degrees (`-90` to `90`)
+- `long` (required) - Longitude in decimal degrees (`-180` to `180`)
+- `distance` (optional) - Maximum search radius in meters (default `1000`, max `50000`)
+- `limit` (optional) - Maximum number of stops to return (default `20`, max `100`)
+
+**Response:** JSON array of nearby stops sorted by nearest first. Each stop includes `stop_id`, `stop_name`, `latitude`, `longitude`, and `distance_meters`.
+
+---
+
 ## Database Configuration
 Stop search persistence reads PostgreSQL connection values from `db_connection.txt` in the repository root.
 Copy `db_connection.txt.example` to `db_connection.txt` and update the values (the `sslmode` entry is optional).
@@ -182,6 +197,11 @@ GET /api/stops/id_1234?detailed=true&delay=true&track=2
 ### Get service notifications for a stop
 ```
 GET /api/current_notifs?stopID=7000107
+```
+
+### Find nearby stops
+```
+GET /api/stops/nearby?lat=49.00937&long=8.40390&distance=750&limit=10
 ```
 
 ---

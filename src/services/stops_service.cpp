@@ -290,3 +290,81 @@ json searchStopsProvider(const std::string& query, const std::string& /*city*/, 
         return {{"error", "Invalid JSON from Provider Search"}};
     }
 }
+
+json getNearbyStops(double latitude, double longitude, int maxDistanceMeters, int limit, const Database& db) {
+    if (!db.hasConfig()) return {{"error", "Database not configured"}};
+
+    PGconn* conn = db.connect();
+    if (!conn) return {{"error", "Database connection returned null"}};
+
+    if (PQstatus(conn) != CONNECTION_OK) {
+        std::string message = PQerrorMessage(conn);
+        PQfinish(conn);
+        return {{"error", "Database connection failed: " + message}};
+    }
+
+    std::string longitudeText = formatDouble(longitude);
+    std::string latitudeText = formatDouble(latitude);
+    std::string distanceText = std::to_string(maxDistanceMeters);
+    std::string limitText = std::to_string(limit);
+
+    const char* queryParams[4] = {
+        longitudeText.c_str(),
+        latitudeText.c_str(),
+        distanceText.c_str(),
+        limitText.c_str()
+    };
+
+    const char* nearbySql =
+        "SELECT stop_id, local_id, stop_name, city, "
+        "ST_Y(location::geometry) AS latitude, "
+        "ST_X(location::geometry) AS longitude, "
+        "ST_Distance(location, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography) AS distance_meters "
+        "FROM stops "
+        "WHERE ST_DWithin(location, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography, $3) "
+        "ORDER BY distance_meters ASC "
+        "LIMIT $4;";
+
+    PGresult* res = PQexecParams(conn, nearbySql, 4, nullptr, queryParams, nullptr, nullptr, 0);
+    if (!res) {
+        PQfinish(conn);
+        return {{"error", "Failed to execute nearby stops query"}};
+    }
+
+    if (PQresultStatus(res) != PGRES_TUPLES_OK) {
+        std::string message = PQerrorMessage(conn);
+        PQclear(res);
+        PQfinish(conn);
+        return {{"error", "Nearby stops query failed: " + message}};
+    }
+
+    json nearbyStops = json::array();
+    int rows = PQntuples(res);
+    for (int i = 0; i < rows; ++i) {
+        json stop{
+            {"stop_id", PQgetvalue(res, i, 0)},
+            {"stop_name", PQgetvalue(res, i, 2)}
+        };
+
+        if (!PQgetisnull(res, i, 1)) stop["local_id"] = PQgetvalue(res, i, 1);
+        if (!PQgetisnull(res, i, 3)) stop["city"] = PQgetvalue(res, i, 3);
+
+        try {
+            stop["latitude"] = std::stod(PQgetvalue(res, i, 4));
+            stop["longitude"] = std::stod(PQgetvalue(res, i, 5));
+            stop["distance_meters"] = std::stod(PQgetvalue(res, i, 6));
+        } catch (...) {
+            // Fallback to raw values if PostgreSQL returns non-standard numeric formatting.
+            std::cerr << "Failed to parse numeric nearby stop fields for stop_id=" << PQgetvalue(res, i, 0) << std::endl;
+            stop["latitude"] = PQgetvalue(res, i, 4);
+            stop["longitude"] = PQgetvalue(res, i, 5);
+            stop["distance_meters"] = PQgetvalue(res, i, 6);
+        }
+
+        nearbyStops.push_back(stop);
+    }
+
+    PQclear(res);
+    PQfinish(conn);
+    return nearbyStops;
+}
