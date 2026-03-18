@@ -87,7 +87,7 @@ Table password_history {
 }
 
 Table api_keys {
-  id serial [pk]
+  id uuid [pk]
   user_id uuid [not null, ref: > users.id]
   key_hash text [not null]
   key_prefix text [not null]
