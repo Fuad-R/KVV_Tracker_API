@@ -1,4 +1,4 @@
-# KVV Tracker — Auth & User Data Schema
+# Transit Tracker — Auth & User Data Schema
 
 This file documents the database schema for the Transit Tracker API authentication, authorization, user preferences and security audit log. It contains the DBML definition followed by human-readable table-by-table documentation, relationships, indexes, and notes about security and usage.
 
@@ -7,7 +7,7 @@ This file documents the database schema for the Transit Tracker API authenticati
 ## DBML
 
 ```dbml
-// KVV Tracker Auth + User Data Schema
+// Transit Tracker Auth + User Data Schema
 
 Table users {
   id uuid [pk, default: `gen_random_uuid()`]
@@ -343,7 +343,7 @@ RETURNING id;
 
 ```sql
 INSERT INTO sessions (user_id, refresh_token_hash, expires_at, ip, user_agent)
-VALUES ('<user-id>', '<sha256-hash>', now() + interval '30 days', '203.0.113.5', 'kvv-web/1.0')
+VALUES ('<user-id>', '<sha256-hash>', now() + interval '30 days', '203.0.113.5', 'web/1.0')
 RETURNING id;
 ```
 
