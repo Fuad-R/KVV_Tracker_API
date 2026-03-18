@@ -1,6 +1,20 @@
-# Transit Tracker — Auth & User Data Schema
+# Transit Tracker — Database Documentation
 
-This file documents the database schema for the Transit Tracker API authentication, authorization, user preferences and security audit log. It contains the DBML definition followed by human-readable table-by-table documentation, relationships, indexes, and notes about security and usage.
+> Comprehensive reference for the Transit Tracker API database schema.
+
+This file documents the database schema for Transit Tracker authentication, authorization, user preferences, security audit logging, and the runtime tables currently documented in `README.md`.
+
+---
+
+## Quick navigation
+
+- [DBML](#dbml)
+- [Overview](#overview)
+- [Core Runtime Tables (from README)](#core-runtime-tables-from-readme)
+- [Tables & column explanations](#tables--column-explanations)
+- [Relationships](#relationships)
+- [Indexes & Uniqueness](#indexes--uniqueness)
+- [Example queries (Postgres)](#example-queries-postgres)
 
 ---
 
@@ -152,6 +166,39 @@ This schema covers:
 - Security auditing: `security_events`.
 
 The schema aims to separate concerns (auth vs preferences) and support common features: OAuth sign-ins, API keys, refreshable sessions, token-based flows (password resets, email verification), and an append-only audit log.
+
+---
+
+## Core Runtime Tables (from README)
+
+The following SQL definitions are included from `README.md` and represent the core runtime tables referenced in the app setup documentation:
+
+```sql
+CREATE TABLE stops (
+   stop_id TEXT PRIMARY KEY,
+   local_id TEXT,
+   stop_name TEXT NOT NULL,
+   city TEXT,
+   mot SMALLINT[],
+   location GEOGRAPHY(Point, 4326) NOT NULL,
+   original_search TEXT,
+   created TIMESTAMPTZ DEFAULT NOW(),
+   last_updated TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE api_keys (
+   id SERIAL PRIMARY KEY,
+   user_id INTEGER NOT NULL,
+   key_hash TEXT NOT NULL,
+   key_prefix TEXT NOT NULL,
+   name TEXT NOT NULL,
+   scopes TEXT[] DEFAULT '{}',
+   created_at TIMESTAMPTZ DEFAULT NOW(),
+   expires_at TIMESTAMPTZ,
+   revoked BOOLEAN DEFAULT FALSE,
+   last_used_at TIMESTAMPTZ
+);
+```
 
 ---
 
@@ -356,5 +403,3 @@ ON CONFLICT (user_id) DO UPDATE
   SET favorite_stops = EXCLUDED.favorite_stops,
       updated_at = now();
 ```
-- export this markdown as a downloadable file.
-
