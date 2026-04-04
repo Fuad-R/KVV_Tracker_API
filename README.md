@@ -219,3 +219,31 @@ All endpoints return JSON. Standard departure response:
 - Repeated queries within the TTL window return cached results
 - Platform filtering is applied post-normalization (locally)
 - Upstream provider supports up to 40 departures per request
+
+---
+
+## Running Tests
+
+Configure a fresh out-of-source build directory and run the unit plus route smoke tests with:
+
+```bash
+cmake -S . -B build-tests -G Ninja
+cmake --build build-tests --target transit_tracker_tests
+ctest --test-dir build-tests --output-on-failure
+```
+
+To build the API server from the same build directory:
+
+```bash
+cmake --build build-tests --target kvv_aggregator
+```
+
+For GNU/Clang coverage builds, enable instrumentation during configure:
+
+```bash
+cmake -S . -B build-coverage -G Ninja -DENABLE_COVERAGE=ON
+cmake --build build-coverage --target transit_tracker_tests
+ctest --test-dir build-coverage --output-on-failure
+```
+
+If `gcovr` is installed, CMake will also expose a `coverage` target in coverage-enabled builds.
