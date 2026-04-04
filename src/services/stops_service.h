@@ -22,3 +22,4 @@ std::optional<StopRecord> parseStopRecord(const json& stop);
 std::vector<StopRecord> extractStopRecords(const json& searchResult);
 void ensureStopsInDatabase(const json& searchResult, const std::string& originalSearch, const Database& db);
 json searchStopsProvider(const std::string& query, const std::string& city = "", bool includeLocation = false);
+json getNearbyStops(double latitude, double longitude, int maxDistanceMeters, int limit, const Database& db);
